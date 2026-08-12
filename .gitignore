@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Secrets / local config
+.env
+xmly_profile/
+*.local.py
+
+# Debug artifacts produced while running
+_last_publish_before.png
+_last_publish_after.png
+*.png
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

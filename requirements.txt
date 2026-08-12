@@ -1,0 +1,6 @@
+# Required
+playwright>=1.40
+
+# Optional: if you want to load the profile path from a .env file you can use
+# python-dotenv, but the script also reads .env manually with no extra dependency.
+# python-dotenv>=1.0
