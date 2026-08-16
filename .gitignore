@@ -15,6 +15,10 @@ _last_publish_before.png
 _last_publish_after.png
 *.png
 
+# Publish journal & summary (per-deployment state, not part of the repo)
+publish_manifest.jsonl
+published_*.txt
+
 # OS / editor
 .DS_Store
 .idea/

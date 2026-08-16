@@ -22,6 +22,13 @@
 - **Safe by default** — a dry-run mode and an interactive confirmation step
   before anything is published; default visibility is **private**.
 - **One-time login** — scan the QR code once, the session is persisted.
+- **Album pre-check** — before a batch, verifies the target album actually
+  exists in your account and aborts early (with a clear message) if not.
+- **Idempotent resume** — keeps a `publish_manifest.jsonl` journal; already
+  published titles are skipped automatically, so an interrupted batch can be
+  re-run without creating duplicates. A `published_*.txt` summary is written.
+- **Real-time logs** — stdout is flushed line-by-line, so `> log 2>&1`
+  redirection still shows live progress.
 
 ## ⚠️ Disclaimer
 
@@ -53,6 +60,10 @@ python login.py --profile /path/to/profile
 
 A QR code is shown (or saved to `_login_qr.png`). Scan it with the Ximalaya
 app. After `LOGIN_OK` you never need to scan again.
+
+> **QR fix (2026-08-16):** the real login QR is read from `div.qrcode`'s
+> live base64 image — the old code grabbed the site logo. If the app says the
+> code is "已失效", just re-run `login.py` to fetch a fresh one.
 
 ### 2. Prepare your files
 
@@ -99,7 +110,8 @@ Precedence (highest wins): **CLI argument > environment variable / `.env` > defa
 | Album name         | `-a/--album`        | `XIMALAYA_ALBUM`           | *(required)*           |
 | Profile directory  | `-p/--profile`      | `XIMALAYA_PROFILE`         | `./xmly_profile`       |
 | Visibility         | `--visibility`      | `XIMALAYA_VISIBILITY`      | `private`              |
-| Headless browser   | `--no-headless`     | `XIMALAYA_HEADLESS`        | `true`                 |
+| Headless browser   | `--no-headless` / `--headless` | `XIMALAYA_HEADLESS`   | `true` (headless; `--headless` accepted for compatibility) |
+| Skip manifest resume | `--no-resume`    | —                          | off (resume is on)     |
 | Interval (sec)     | `--interval`        | `XIMALAYA_INTERVAL`        | `8`                    |
 | Upload timeout     | `--timeout`         | `XIMALAYA_UPLOAD_TIMEOUT`  | `300`                  |
 | After-publish wait | `--after`           | `XIMALAYA_AFTER_PUBLISH`   | `5`                    |
@@ -119,8 +131,23 @@ be just `01`, set `--title-prefix "Pod-"`. Leave it empty to keep full names.
 
 ### Resume / skip
 
-`--start-from N` republishes starting from the N-th matched item (1-based),
-handy when the first few were already published manually.
+The uploader keeps a journal at `publish_manifest.jsonl` of every sound it
+publishes. On the next run it **automatically skips any title already in that
+journal**, so you can just re-run the same command after an interruption and
+nothing gets duplicated:
+
+```bash
+python uploader.py --folder my_audio --album "My Album" --yes   # re-run is safe
+```
+
+There are two explicit overrides:
+
+- `--start-from N` — republish starting from the N-th matched item (1-based).
+  Handy when you want to skip the first few manually.
+- `--no-resume` — ignore the manifest entirely and (re)publish everything.
+
+After each run a `published_YYYYMMDD_HHMMSS.txt` summary is written with the
+title/url/timestamp of every item.
 
 ## 🛠 Fix already-published descriptions
 
@@ -133,13 +160,46 @@ python fix_description.py --folder my_audio --album "My Album"
 It locates each sound by title in your sound list, opens the edit page, sets
 the description and saves.
 
+## 🔧 Helper scripts
+
+- **`verify_login.py`** — quickly check whether the persisted profile is still
+  logged in (exits 0/1). Run it before a big batch.
+  ```bash
+  python verify_login.py
+  ```
+- **`probe_album.py`** — check whether a target album exists in your account
+  before publishing (exits 0/1). Catches name typos / not-yet-created albums
+  early instead of failing per-item.
+  ```bash
+  python probe_album.py "My Album"
+  ```
+
+## 💡 Runtime notes (important)
+
+- **Use unbuffered output** when redirecting to a file so you see live progress:
+  `python -u uploader.py ... > log 2>&1` (the script also flushes internally now).
+- **Login must happen on the machine that runs the uploader** — the QR is
+  scanned with the Ximalaya phone app against the local browser profile, so a
+  sandbox / remote box cannot log in for you. Run `login.py` locally once.
+- **Album pre-check** runs automatically at the start of every publish; if the
+  album is missing you'll get a clear "create it first" message instead of
+  silent per-item failures.
+
 ## 🐛 Troubleshooting
 
 - **`KindEditor instance not found`** — the upload page layout may have
   changed, or the file had not finished loading the editor. Re-run the item.
-- **Login expired** — re-run `python login.py` to refresh the profile.
-- **QR code not captured** — open the browser window (omit `--headless` in
-  `login.py`) and scan the on-screen code.
+- **Login expired** — re-run `python verify_login.py` to confirm, then
+  `python login.py` to refresh the profile.
+- **QR shows "已失效" / not a QR** — the old code grabbed the site logo.
+  Re-run `login.py`; it now reads the live `div.qrcode` base64 image.
+- **`unrecognized arguments: --headless`** — fixed; `--headless` is now
+  accepted (it is the default anyway). Use `--no-headless` to show the window.
+- **Album not found** — the pre-check aborts with a clear message. Create the
+  album in 创作中心 → 专辑, or fix the `--album` spelling. `probe_album.py`
+  can verify the name beforehand.
+- **Duplicate uploads after a restart** — the manifest auto-skips already
+  published titles; use `--no-resume` only if you really want to re-publish.
 - **Description shows as one block** — that means `\n` was not converted; this
   version converts newlines to `<br>` before writing. Use `fix_description.py`
   if you hit the old behaviour.
@@ -148,8 +208,10 @@ the description and saves.
 
 ```
 ximalaya-bulk-uploader/
-├── uploader.py          # main batch uploader
-├── login.py             # one-time QR login -> persisted profile
+├── uploader.py          # main batch uploader (album pre-check + manifest resume)
+├── login.py             # one-time QR login -> persisted profile (live QR fix)
+├── verify_login.py      # check whether the profile is still logged in
+├── probe_album.py       # check whether a target album exists
 ├── fix_description.py   # re-apply descriptions to published sounds
 ├── .env.example         # all configurable variables
 ├── requirements.txt

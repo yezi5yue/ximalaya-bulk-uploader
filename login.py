@@ -11,17 +11,65 @@ directory, so the uploader can reuse it forever (no more scanning).
 Usage:
     python login.py                       # uses ./xmly_profile
     python login.py --profile /path/to/profile
+    python login.py --headless            # run headless, QR saved as PNG
 
 After a successful login the script prints "LOGIN_OK" and exits.
+
+Note (2026-08-16 fix):
+  * The real login QR is the element `div.qrcode`, whose background-image is a
+    live (per-load) base64 PNG. The old code grabbed the page's first <img>,
+    which was the site logo — that is fixed here: we read the base64 directly.
+  * Login success used to rely only on page text, which missed cases where the
+    phone said "success" but the browser session was not actually written. We
+    now treat a login *cookie* (token/uid/session/...) as the primary signal.
 """
 
 import os
 import sys
 import argparse
 import time
+import base64
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOGIN_URL = "https://studio.ximalaya.com/"
+
+
+# ----------------------------------------------------------------------
+# QR + login-state detection (verified against the live site)
+# ----------------------------------------------------------------------
+def extract_qr_base64(page):
+    """Return the live base64 PNG string of the login QR (div.qrcode
+    background-image), or None if not found."""
+    return page.evaluate("""() => {
+        const el = document.querySelector('div.qrcode');
+        if (!el) return null;
+        const s = getComputedStyle(el).backgroundImage;
+        const m = s.match(/data:image\\/png;base64,([^"')]+)/);
+        return m ? m[1] : null;
+    }""")
+
+
+def is_logged_in(page, context):
+    """Primary signal: a login/session cookie is present.
+    Secondary signal: page text shows we are past the QR-login screen."""
+    try:
+        cookies = context.cookies()
+    except Exception:
+        cookies = []
+    for c in cookies:
+        n = (c.get("name") or "").lower()
+        if any(k in n for k in
+               ["token", "uid", "auth", "session", "xmly_token", "login"]):
+            return True
+    try:
+        text = page.evaluate("() => document.body.innerText")
+    except Exception:
+        text = ""
+    if "扫码登录" not in text and any(
+        k in text for k in ["退出登录", "创作中心", "上传作品", "我的"]
+    ):
+        return True
+    return False
 
 
 def main():
@@ -30,7 +78,7 @@ def main():
                         default=os.path.join(SCRIPT_DIR, "xmly_profile"),
                         help="Directory to store the persisted Chrome profile")
     parser.add_argument("--headless", action="store_true",
-                        help="Run headless (the QR code is still saved as a PNG)")
+                        help="Run headless; the QR is saved as a PNG to scan")
     args = parser.parse_args()
 
     try:
@@ -52,34 +100,40 @@ def main():
         page = context.new_page()
         page.goto(LOGIN_URL, timeout=60000)
 
-        # Try to find the QR code image and save it.
+        # Capture the real QR code. Prefer div.qrcode base64; fall back to the
+        # first <img> screenshot only if the base64 path fails.
+        qr_saved = False
         try:
-            page.wait_for_selector("img", timeout=15000)
-            qr = page.locator("img").first
-            qr.screenshot(path=qr_path)
-            print(f"QR code saved to: {qr_path}")
-            if not args.headless:
-                print("Open it (or just look at the browser window) and scan with the Ximalaya app.")
-            else:
-                print(f"Open {qr_path} and scan with the Ximalaya app.")
-        except Exception as e:
-            print("Could not capture the QR image automatically:", e)
-            print("Please scan the code shown in the browser window.")
+            page.wait_for_selector("div.qrcode", timeout=15000)
+            b64 = extract_qr_base64(page)
+            if b64:
+                with open(qr_path, "wb") as fh:
+                    fh.write(base64.b64decode(b64))
+                qr_saved = True
+        except Exception:
+            b64 = None
 
-        # Poll until we are logged in (URL leaves the login page / user menu appears).
+        if not qr_saved:
+            try:
+                page.wait_for_selector("img", timeout=15000)
+                page.locator("img").first.screenshot(path=qr_path)
+                qr_saved = True
+            except Exception as e:
+                print("Could not capture the QR image automatically:", e)
+                print("Please scan the code shown in the browser window.")
+
+        if qr_saved:
+            if not args.headless:
+                print("Scan the QR code shown in the browser window with the Ximalaya app.")
+            else:
+                print(f"QR code saved to: {qr_path}  (open and scan with the Ximalaya app)")
+
+        # Poll until we are logged in (cookie-based primary check).
         print("Waiting for login (scan the QR code) ...", flush=True)
         deadline = time.time() + 180  # 3 minutes
         logged_in = False
         while time.time() < deadline:
-            try:
-                text = page.evaluate("() => document.body.innerText")
-            except Exception:
-                text = ""
-            if "退出登录" in text or "创作中心" in text or "上传作品" in text:
-                logged_in = True
-                break
-            # Also detect a fresh login by the absence of a login QR prompt.
-            if "扫码登录" not in text and ("我的" in text or "消息" in text):
+            if is_logged_in(page, context):
                 logged_in = True
                 break
             time.sleep(3)

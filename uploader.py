@@ -39,9 +39,21 @@ and rate limits.
 import os
 import re
 import sys
+import json
+import time
 import argparse
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# P1-1: force unbuffered stdout so progress is visible even when the script's
+# output is redirected to a file (e.g. `python uploader.py ... > log 2>&1`).
+import builtins as _builtins
+_orig_print = _builtins.print
+
+
+def print(*args, **kwargs):
+    kwargs.setdefault("flush", True)
+    return _orig_print(*args, **kwargs)
 
 # Ximalaya maps the "visibility" radio buttons to these values:
 #   1 = 私密 (private), 2 = 公开 (public), 3 = 仅粉丝可见 (fans)
@@ -52,6 +64,55 @@ AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg", ".wma", ".mpga"}
 
 # The real upload page (the studio home is just a React shell that embeds it).
 UPLOAD_URL = "https://www.ximalaya.com/reform-upload/page/webCenter/upload"
+
+# P1-3 / P2-3: a journal of every successfully published sound, used for
+# idempotent resume (skip titles already published) and a human-readable
+# summary. One JSON object per line: {"title","url","ts"}.
+MANIFEST = os.path.join(SCRIPT_DIR, "publish_manifest.jsonl")
+
+
+def load_published():
+    """Return the set of titles already recorded in the manifest."""
+    if not os.path.exists(MANIFEST):
+        return set()
+    done = set()
+    with open(MANIFEST, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                done.add(json.loads(line)["title"])
+            except Exception:
+                pass
+    return done
+
+
+def record_published(title, url):
+    """Append a published sound to the manifest and return its timestamp."""
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    with open(MANIFEST, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"title": title, "url": url, "ts": ts},
+                            ensure_ascii=False) + "\n")
+    return ts
+
+
+def check_album_exists(page, album_name, timeout=10000):
+    """Open the album picker and verify the target album is listed.
+
+    Called once before a batch: if the album does not exist we abort early
+    instead of failing per-item (which wastes minutes on timeouts).
+    Returns True if found, False otherwise.
+    """
+    try:
+        page.goto(UPLOAD_URL, timeout=60000)
+        page.wait_for_timeout(2500)
+        page.locator("button.search-select-album-btn-2fDgDdbT").first.click()
+        page.wait_for_timeout(1500)
+        items = page.locator("div.scroll-item-content-252FXLKk").all_inner_texts()
+        return any(album_name in t for t in items)
+    except Exception:
+        return False
 
 
 # ----------------------------------------------------------------------
@@ -134,6 +195,9 @@ def build_config():
                         help="private (default) / public / fans")
     parser.add_argument("--no-headless", action="store_true",
                         help="Show the browser window (default is headless)")
+    parser.add_argument("--headless", action="store_true",
+                        help="Run headless (this is already the default; "
+                             "accepted only for compatibility)")
     parser.add_argument("--interval", type=int, help="Seconds between uploads")
     parser.add_argument("--timeout", type=int, dest="upload_timeout",
                         help="Upload wait timeout in seconds")
@@ -147,6 +211,9 @@ def build_config():
     parser.add_argument("--start-from", type=int, default=1, metavar="N",
                         help="Start publishing from the N-th item (1-based)")
     parser.add_argument("--config", help="Path to an alternative .env file")
+    parser.add_argument("--no-resume", action="store_true",
+                        help="Ignore the publish manifest and re-publish "
+                             "everything (otherwise already-published titles are skipped)")
     args = parser.parse_args()
 
     if args.config:
@@ -180,7 +247,12 @@ def build_config():
         defaults["after_publish"] = args.after_publish
     if args.title_prefix is not None:
         defaults["title_prefix"] = args.title_prefix
+    if args.headless:
+        defaults["headless"] = True
+    elif args.no_headless:
+        defaults["headless"] = False
     defaults["dry_run"] = args.dry_run
+    defaults["no_resume"] = args.no_resume
     defaults["yes"] = args.yes
     defaults["start_from"] = args.start_from
 
@@ -295,6 +367,8 @@ def dry_run(folder, config):
     print("=" * 60)
     print(f"Dry run scan: {folder}")
     print(f"Publish order: ascending natural sort of file names")
+    print(f"Visibility  : {config['visibility']} "
+          f"({'仅自己可见' if config['visibility'] == 'private' else '公开' if config['visibility'] == 'public' else '仅粉丝可见'})")
     print(f"Matched pairs (audio + txt): {len(pairs)}")
     print(f"Audio without txt: {len(orphan_audio)}")
     print(f"Txt without audio: {len(orphan_txt)}")
@@ -328,7 +402,8 @@ def request_confirm(folder, album, pairs, orphan_audio, orphan_txt, config):
     print("⚠ Confirm before publishing")
     print(f"Folder : {folder}")
     print(f"Album  : {album}")
-    print(f"Visibility: {config['visibility']}")
+    print(f"Visibility: {config['visibility']} "
+          f"({'仅自己可见' if config['visibility'] == 'private' else '公开' if config['visibility'] == 'public' else '仅粉丝可见'})")
     print(f"Will publish {len(pairs)} items in this order:")
     for i, (base, _, _) in enumerate(pairs, 1):
         print(f"  {i:>3}. {title_from_audio(base, prefix)}")
@@ -478,6 +553,12 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
         print(f"Skipping the first {start_idx} item(s); starting at #{start_from}.")
     pairs = pairs[start_idx:]
 
+    # P1-3: idempotent resume — load titles already published.
+    published = set() if config.get("no_resume") else load_published()
+    if published:
+        print(f"Manifest: {len(published)} title(s) already published — "
+              f"they will be skipped (use --no-resume to force re-publish).")
+
     if not skip_confirm and not request_confirm(
             folder, config["album"], pairs, orphan_audio, orphan_txt, config):
         print("Publish cancelled.")
@@ -487,6 +568,7 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
     prefix = config["title_prefix"]
     total = len(pairs)
     success_count = 0
+    results = []  # (title, ok, message) for the summary file
 
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
@@ -495,8 +577,25 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
         )
         page = context.new_page()
 
+        # P1-2: pre-check the album exists before burning minutes on timeouts.
+        print("Pre-checking that the album exists in your account ...")
+        if not check_album_exists(page, config["album"]):
+            print(f"\n❌ Album not found: {config['album']}")
+            print("   Please create this album first in the Ximalaya Creator "
+                  "Center (创作中心 → 专辑), then re-run.")
+            context.close()
+            sys.exit(1)
+        print("   Album found. Starting publish.\n")
+
         for i, (base, apath, tpath) in enumerate(pairs, 1):
             title = title_from_audio(base, prefix)
+
+            # P1-3: skip titles already recorded in the manifest.
+            if title in published:
+                print(f"\n[{i}/{total}] ⏭ Already published, skipping: {title}")
+                results.append((title, True, "skipped (already in manifest)"))
+                continue
+
             desc = read_description(tpath)
             print(f"\n[{i}/{total}] Publishing: {title}")
             try:
@@ -507,12 +606,16 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
                     upload_timeout_sec=config["upload_timeout"],
                 )
                 if ok:
+                    ts = record_published(title, msg)  # P1-3: journal it
                     success_count += 1
-                    print(f"  ✅ Success: {msg}")
+                    print(f"  ✅ Success: {msg}  ({ts})")
+                    results.append((title, True, msg))
                 else:
                     print(f"  ❌ Failed: {msg}")
+                    results.append((title, False, msg))
             except Exception as e:  # keep going, record the failure
                 print(f"  ❌ Error: {type(e).__name__}: {e}")
+                results.append((title, False, f"{type(e).__name__}: {e}"))
 
             if i < total:
                 print(f"  ⏳ Waiting {config['interval']}s ...")
@@ -521,6 +624,18 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
         context.close()
 
     print(f"\nDone: {success_count}/{total} published successfully.")
+
+    # P2-3: write a human-readable summary file (merged with the manifest).
+    summary_path = os.path.join(
+        SCRIPT_DIR, f"published_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+    with open(summary_path, "w", encoding="utf-8") as fh:
+        fh.write(f"发布结果 {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        fh.write(f"专辑：{config['album']}  可见性：{config['visibility']}\n")
+        fh.write(f"成功 {success_count}/{total}\n")
+        fh.write("-" * 48 + "\n")
+        for t, ok, m in results:
+            fh.write(f"{'✅' if ok else '❌'} {t}\n   {m}\n")
+    print(f"结果汇总已写入：{summary_path}")
 
 
 # ----------------------------------------------------------------------
