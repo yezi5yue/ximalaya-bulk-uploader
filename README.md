@@ -208,7 +208,7 @@ ximalaya-bulk-uploader/
 ## 🔗 相关链接
 
 - 项目介绍（GitHub Issue #1）：https://github.com/yezi5yue/ximalaya-bulk-uploader/issues/1
-- 微信公众号配套文章《孩子要听几十段音频，我不想每天手动上传了》：文章已写入公众号草稿箱，正式「发表」后请把 `mp.weixin.qq.com/s/...` 永久链接发我，我会补到这里。
+- 微信公众号配套文章《孩子要听几十段音频，我不想每天手动上传了》：https://mp.weixin.qq.com/s/PNfIqKHhiBPDKADfzcWK4A
 
 ## 📄 开源协议
 
