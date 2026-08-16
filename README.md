@@ -23,28 +23,11 @@
 
 ## 📌 版本更新说明（Changelog）
 
-### v1.1.0 — 2026-08-16（实战加固版）
+完整的版本更新记录维护在 [CHANGELOG.md](CHANGELOG.md)。
 
-基于多批次批量上传实战踩坑，修复并增强（详见 `UPDATE_SUGGESTIONS.md`）：
-
-- **P0 阻断性修复**
-  - `login.py`：二维码改为从 `div.qrcode` 背景实时读取 base64 图片（旧逻辑抓到了网站 logo）。
-  - `login.py`：登录成功判定改用 cookie（token/uid/session 等）为主判据，页面文本为辅，避免"手机提示成功但会话未写入"的漏判。
-  - `uploader.py`：新增 `--headless` 参数兼容（旧版会因该参数直接 `unrecognized arguments` 报错；现在 headless 已是默认行为）。
-- **P1 健壮性与可观测性**
-  - `uploader.py`：全局 `print` 强制 `flush=True`，重定向到文件也能看到实时进度（P1-1）。
-  - `uploader.py`：发布前 `check_album_exists` 预检专辑，不存在立即报错退出，不再逐条超时浪费数分钟（P1-2）。
-  - `uploader.py`：引入 `publish_manifest.jsonl` 发布清单实现幂等续传，重跑自动跳过已发布标题，不再依赖手动数数 `--start-from`（P1-3）。
-- **P2 体验与可维护性**
-  - dry-run 与发布确认明确打印可见性中文（私密/公开/仅粉丝可见）（P2-1）。
-  - 发布完成生成 `published_YYYYMMDD_HHMMSS.txt` 结果汇总文件（P2-3）。
-  - 新增排障辅助脚本 `verify_login.py`（检查登录态）、`probe_album.py`（检查专辑是否存在）（P1-2 配套）。
-  - 固化运行方式与环境约束到 README（P2-2）。
-- **文档**：README / `.gitignore` / `.env.example` 同步更新；运行时产物（manifest、summary）已加入 `.gitignore`。
-
-### v1.0.0 — 初始版本
-
-- 通用批量上传：音频 + 同名 txt 简介、自然排序、富文本换行保留、私密默认、dry-run、交互确认、扫码登录。
+近期版本速览：
+- **v1.1.0（2026-08-16）** — 实战加固版：实时二维码、`--headless` 兼容、cookie 登录判定、flush 日志、专辑预检、`publish_manifest.jsonl` 幂等续传、结果汇总、辅助脚本。
+- **v1.0.0** — 初始版本：通用批量上传核心能力。
 
 ---
 
@@ -215,6 +198,7 @@ ximalaya-bulk-uploader/
 ├── fix_description.py   # 重新写入已发布声音的简介
 ├── .env.example         # 所有可配置变量
 ├── requirements.txt
+├── CHANGELOG.md          # 版本更新记录
 ├── LICENSE              # MIT
 └── README.md
 ```
