@@ -551,6 +551,18 @@ def _publish_one(page, apath, title, desc, album, visibility_value='1',
         pick.click()
     fc.value.set_files(apath)
     page.wait_for_timeout(1500)
+    # Positively confirm webuploader accepted the file (its name or an
+    # "uploaded" hint must appear). Otherwise the later publish would fail
+    # silently — we surface it as a real failure instead of a false success.
+    _name = apath.rsplit("/", 1)[-1]
+    try:
+        page.wait_for_function(
+            "() => { const t = document.body.innerText; "
+            f"return t.includes({json.dumps(_name)}) || t.includes('上传成功'); }}",
+            timeout=60000,
+        )
+    except Exception:
+        return False, "file chooser did not accept the file (not selected)"
     # Wait for webuploader to finish uploading the chosen file.
     if not _wait_upload_done(page, timeout_sec=upload_timeout_sec):
         return False, "timed out waiting for upload to finish"
@@ -580,14 +592,22 @@ def _publish_one(page, apath, title, desc, album, visibility_value='1',
     page.locator("button.confirm-publish-btn-new-3F0EvXXa").first.click()
     page.wait_for_timeout(after_publish_sec * 1000)
 
-    # 8. Detect success.
-    url = page.url
-    body = page.evaluate("() => document.body.innerText")
-    success = ("uploadSuccess" in url or
-               any(s in body for s in ["发布成功", "上传成功", "已发布", "内容管理"]))
+    # 8. Detect success: wait for the page to navigate to the success page.
+    #    NOTE: do NOT rely on vague navbar text like "内容管理" — the upload
+    #    page always shows it, so it once caused false successes (the page
+    #    stayed on webCenter/upload yet was marked done). We require the
+    #    explicit uploadSuccess navigation or a clear "发布成功" message.
+    success = False
+    try:
+        page.wait_for_url(lambda u: "uploadSuccess" in u, timeout=30000)
+        success = True
+    except Exception:
+        body = page.evaluate("() => document.body.innerText")
+        if "发布成功" in body:
+            success = True
     if success:
-        return True, url
-    return False, f"no success signal detected, URL: {url}"
+        return True, page.url
+    return False, f"no success signal within timeout, URL: {page.url}"
 
 
 def publish_all(folder, config, skip_confirm=False, start_from=1):
