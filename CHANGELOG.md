@@ -4,6 +4,20 @@
 
 ---
 
+## [v1.2.0] — 2026-08-18（适配喜马拉雅上传页改版）
+
+喜马拉雅上传页 `reform-upload/page/webCenter/upload` 改为 landing 页，直接 `goto` 不再渲染上传表单，导致旧版文件选择（`set_input_files`）与专辑预检（直接点专辑按钮）全部失效。
+
+### 修复
+- `uploader.py`：`_publish_one` 的文件选择改为先点击 webuploader「上传音频」入口（`div.webuploader-pick`），再捕获原生文件对话框（`page.expect_file_chooser`）填入音频，从而进入真正的上传表单。
+- `uploader.py`：`check_album_exists` 预检改为先用一个临时静音 wav 钥匙文件（`_make_key_file` / `_enter_form`）进入表单，再展开专辑列表核对；否则 landing 页无专辑按钮会误报「专辑不存在」。
+- 新增依赖：`wave` / `tempfile`（均为标准库，无需额外安装）。
+
+### 验证
+- 单条冒烟测试通过（发布成功返回 `sound/manage` 链接）；随后批量发布 43 条（含嵌套章节结构拍平）到「七下数学」专辑实战验证。
+
+---
+
 ## [v1.1.0] — 2026-08-16（实战加固版）
 
 基于多批次批量上传实战踩坑，修复并增强（详见 `UPDATE_SUGGESTIONS.md`）。

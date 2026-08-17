@@ -42,6 +42,8 @@ import sys
 import json
 import time
 import argparse
+import wave
+import tempfile
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -97,16 +99,61 @@ def record_published(title, url):
     return ts
 
 
-def check_album_exists(page, album_name, timeout=10000):
+def _make_key_file():
+    """Create a tiny silent .wav used only to open the upload form (the upload
+    page is a landing page now; we must enter the form before the album picker
+    is reachable). Returns the temp file path."""
+    fd, path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    with wave.open(path, "w") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b"\x00\x00" * 8000)  # 1 second of silence
+    return path
+
+
+def _enter_form(page, key_file):
+    """Open the upload landing page and enter the single-file upload form by
+    clicking the webuploader '上传音频' entry and feeding the key file through
+    the native file chooser it triggers."""
+    page.goto(UPLOAD_URL, timeout=60000)
+    page.wait_for_timeout(4000)
+    pick = page.locator("div.webuploader-pick", has_text="上传音频").first
+    pick.wait_for(timeout=15000)
+    with page.expect_file_chooser(timeout=10000) as fc:
+        pick.click()
+    fc.value.set_files(key_file)
+    # Wait until the form fields are rendered (title input appears).
+    page.locator("input.ant-input[placeholder='请输入声音标题']").wait_for(timeout=20000)
+    page.wait_for_timeout(800)
+
+
+def check_album_exists(page, album_name, key_file=None, timeout=10000):
     """Open the album picker and verify the target album is listed.
 
     Called once before a batch: if the album does not exist we abort early
     instead of failing per-item (which wastes minutes on timeouts).
     Returns True if found, False otherwise.
+
+    The upload page is now a landing page; the album picker only exists inside
+    the upload form, so we first enter the form (using `key_file`) before
+    probing the picker.
     """
+    if key_file:
+        try:
+            _enter_form(page, key_file)
+        except Exception as e:
+            print(f"  (could not open the upload form: {e})")
+            return False
+    else:
+        # Legacy path (kept for safety): assume the form is already open.
+        try:
+            page.goto(UPLOAD_URL, timeout=60000)
+            page.wait_for_timeout(2500)
+        except Exception:
+            return False
     try:
-        page.goto(UPLOAD_URL, timeout=60000)
-        page.wait_for_timeout(2500)
         page.locator("button.search-select-album-btn-2fDgDdbT").first.click()
         page.wait_for_timeout(1500)
         items = page.locator("div.scroll-item-content-252FXLKk").all_inner_texts()
@@ -492,11 +539,22 @@ def _publish_one(page, apath, title, desc, album, visibility_value='1',
     """Publish a single audio file on the already-open browser page.
     Returns (success: bool, message: str)."""
     page.goto(UPLOAD_URL, timeout=60000)
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(4000)
 
-    # 1. Choose the file.
-    page.locator("input[type=file][name=file]").set_input_files(apath)
-    page.wait_for_timeout(2000)
+    # 1. Choose the file. The upload page now shows a landing page with a
+    #    webuploader "上传音频" entry; clicking it opens a native file chooser,
+    #    so we capture the chooser and feed the file in (set_input_files on the
+    #    hidden input alone no longer works because the form isn't rendered yet).
+    pick = page.locator("div.webuploader-pick", has_text="上传音频").first
+    pick.wait_for(timeout=15000)
+    with page.expect_file_chooser(timeout=10000) as fc:
+        pick.click()
+    fc.value.set_files(apath)
+    page.wait_for_timeout(1500)
+    # Wait for webuploader to finish uploading the chosen file.
+    if not _wait_upload_done(page, timeout_sec=upload_timeout_sec):
+        return False, "timed out waiting for upload to finish"
+    page.wait_for_timeout(1000)
 
     # 2. Select album.
     _select_album(page, album)
@@ -579,7 +637,8 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
 
         # P1-2: pre-check the album exists before burning minutes on timeouts.
         print("Pre-checking that the album exists in your account ...")
-        if not check_album_exists(page, config["album"]):
+        _key = _make_key_file()
+        if not check_album_exists(page, config["album"], key_file=_key):
             print(f"\n❌ Album not found: {config['album']}")
             print("   Please create this album first in the Ximalaya Creator "
                   "Center (创作中心 → 专辑), then re-run.")
