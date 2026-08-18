@@ -588,26 +588,58 @@ def _publish_one(page, apath, title, desc, album, visibility_value='1',
     if not _wait_upload_done(page, timeout_sec=upload_timeout_sec):
         return False, "timed out waiting for upload to finish"
 
-    # 7. Click "确认发布".
-    page.locator("button.confirm-publish-btn-new-3F0EvXXa").first.click()
-    page.wait_for_timeout(after_publish_sec * 1000)
-
-    # 8. Detect success: wait for the page to navigate to the success page.
-    #    NOTE: do NOT rely on vague navbar text like "内容管理" — the upload
-    #    page always shows it, so it once caused false successes (the page
-    #    stayed on webCenter/upload yet was marked done). We require the
-    #    explicit uploadSuccess navigation or a clear "发布成功" message.
-    success = False
+    # 7. Tick the "我已阅读并同意《知识产权承诺》" agreement if present.
+    #    The 确认发布 button stays DISABLED until this is checked, which is
+    #    exactly why some publishes silently did nothing (page never left
+    #    webCenter/upload). Ticking it up front makes the click reliable.
     try:
-        page.wait_for_url(lambda u: "uploadSuccess" in u, timeout=30000)
-        success = True
+        page.evaluate("""() => {
+            const labels = Array.from(document.querySelectorAll('label,span,div'));
+            const hit = labels.find(el => el.innerText && el.innerText.includes('知识产权承诺'));
+            const cb = hit ? hit.querySelector('input[type=checkbox]') : null;
+            if (cb && !cb.checked) {
+                cb.checked = true;
+                cb.dispatchEvent(new Event('change', {bubbles:true}));
+                cb.dispatchEvent(new Event('click', {bubbles:true}));
+            }
+        }""")
     except Exception:
-        body = page.evaluate("() => document.body.innerText")
-        if "发布成功" in body:
+        pass
+    page.wait_for_timeout(800)
+
+    # 8. Click "确认发布" with retries. The button can be momentarily disabled
+    #    while the audio finishes server-side processing, so we wait for it to
+    #    become enabled, click, and re-check for the success navigation — up to
+    #    4 attempts — before giving up.
+    publish_btn = page.locator("button.confirm-publish-btn-new-3F0EvXXa").first
+    success = False
+    last_url = page.url
+    for attempt in range(4):
+        try:
+            publish_btn.wait_for(state="enabled", timeout=15000)
+        except Exception:
+            pass
+        try:
+            publish_btn.click(timeout=10000, force=True)
+        except Exception:
+            pass
+        try:
+            page.wait_for_url(lambda u: "uploadSuccess" in u, timeout=20000)
             success = True
+            break
+        except Exception:
+            body = page.evaluate("() => document.body.innerText")
+            if "发布成功" in body:
+                success = True
+                break
+            last_url = page.url
+            page.wait_for_timeout(3000)
     if success:
         return True, page.url
-    return False, f"no success signal within timeout, URL: {page.url}"
+    # DIAGNOSTIC: surface what the page shows so we can see why publish stalled.
+    diag = page.evaluate("() => document.body.innerText") or ""
+    diag = diag.replace("\n", " ").strip()[:500]
+    return False, f"no success signal within timeout, URL: {last_url} | page: {diag}"
 
 
 def publish_all(folder, config, skip_confirm=False, start_from=1):
