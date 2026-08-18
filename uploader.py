@@ -41,6 +41,7 @@ import re
 import sys
 import json
 import time
+import random
 import argparse
 import wave
 import tempfile
@@ -197,13 +198,18 @@ def build_config():
     defaults = {
         "folder": None,
         "album": None,
+        "album_id": None,
         "profile": os.path.join(SCRIPT_DIR, "xmly_profile"),
         "visibility": "private",
         "headless": True,
         "interval": 8,
+        "interval_jitter": 7,
         "upload_timeout": 300,
         "after_publish": 5,
         "title_prefix": "",
+        "verify": True,
+        "verify_order": "strict",
+        "verify_fail_exit": True,
     }
 
     # 1) .env file, then process environment (env wins over file).
@@ -213,21 +219,29 @@ def build_config():
     key_map = {
         "XIMALAYA_FOLDER": "folder",
         "XIMALAYA_ALBUM": "album",
+        "XIMALAYA_ALBUM_ID": "album_id",
         "XIMALAYA_PROFILE": "profile",
         "XIMALAYA_VISIBILITY": "visibility",
         "XIMALAYA_HEADLESS": "headless",
         "XIMALAYA_INTERVAL": "interval",
+        "XIMALAYA_INTERVAL_JITTER": "interval_jitter",
         "XIMALAYA_UPLOAD_TIMEOUT": "upload_timeout",
         "XIMALAYA_AFTER_PUBLISH": "after_publish",
         "XIMALAYA_TITLE_PREFIX": "title_prefix",
+        "XIMALAYA_VERIFY": "verify",
+        "XIMALAYA_VERIFY_ORDER": "verify_order",
+        "XIMALAYA_VERIFY_FAIL_EXIT": "verify_fail_exit",
     }
     for env_key, cfg_key in key_map.items():
         if env_key in env and env[env_key] != "":
             val = env[env_key]
             if cfg_key == "headless":
                 defaults[cfg_key] = _coerce_bool(val)
-            elif cfg_key in ("interval", "upload_timeout", "after_publish"):
+            elif cfg_key in ("interval", "interval_jitter", "upload_timeout",
+                              "after_publish", "album_id"):
                 defaults[cfg_key] = _coerce_int(val, defaults[cfg_key])
+            elif cfg_key in ("verify", "verify_fail_exit"):
+                defaults[cfg_key] = _coerce_bool(val)
             else:
                 defaults[cfg_key] = val
 
@@ -261,6 +275,28 @@ def build_config():
     parser.add_argument("--no-resume", action="store_true",
                         help="Ignore the publish manifest and re-publish "
                              "everything (otherwise already-published titles are skipped)")
+    parser.add_argument("-i", "--album-id",
+                        help="Numeric album id (from the Creator Center URL). "
+                             "Required for the automatic post-publish verification "
+                             "(completeness + order). If omitted, verification is skipped.")
+    parser.add_argument("--interval-jitter", type=int,
+                        help="Extra random seconds ADDED on top of --interval "
+                             "between uploads (default 7). The real wait becomes "
+                             "interval + random(0..jitter), which avoids a fixed "
+                             "rhythm that platforms flag as bot traffic.")
+    parser.add_argument("--no-verify", action="store_true",
+                        help="Skip the automatic post-publish verification "
+                             "(completeness + order).")
+    parser.add_argument("--verify-order", choices=["strict", "monotonic", "off"],
+                        default="strict",
+                        help="Order check strictness after publishing: "
+                             "'strict' (default) requires the online order to "
+                             "exactly match the chapter/natural order; "
+                             "'monotonic' accepts either ascending or descending; "
+                             "'off' skips the order check (still checks completeness).")
+    parser.add_argument("--no-verify-fail-exit", action="store_true",
+                        help="Do not exit with a non-zero code when verification "
+                             "finds missing or out-of-order sounds (just report).")
     args = parser.parse_args()
 
     if args.config:
@@ -302,6 +338,16 @@ def build_config():
     defaults["no_resume"] = args.no_resume
     defaults["yes"] = args.yes
     defaults["start_from"] = args.start_from
+    if args.album_id is not None:
+        defaults["album_id"] = args.album_id
+    if args.interval_jitter is not None:
+        defaults["interval_jitter"] = args.interval_jitter
+    if args.no_verify:
+        defaults["verify"] = False
+    if args.verify_order is not None:
+        defaults["verify_order"] = args.verify_order
+    if args.no_verify_fail_exit:
+        defaults["verify_fail_exit"] = False
 
     # Validate required values.
     if not defaults["folder"]:
@@ -534,12 +580,35 @@ def _wait_upload_done(page, timeout_sec=300):
     return False
 
 
+# Phrases that indicate the platform has throttled / challenged the session
+# (risk control, captcha, "please verify you are human", rate limit ...).
+# Seeing any of these means continuing to hammer the UI is pointless — we
+# should stop and let the user intervene. Network feedback confirms Ximalaya
+# enforces rate limits (error 104) and an anti-"brush" risk control (error
+# 110), so detecting the challenge page early saves wasted minutes.
+_BLOCK_TEXTS = [
+    "验证码", "安全验证", "请完成安全验证", "操作过于频繁", "访问受限",
+    "人机验证", "请验证你是人类", "网络异常请稍后重试", "您的操作过于频繁",
+]
+
+
+def _blocked(page):
+    """Return True if the page shows a captcha / risk-control challenge."""
+    try:
+        txt = page.evaluate("() => document.body.innerText") or ""
+    except Exception:
+        return False
+    return any(k in txt for k in _BLOCK_TEXTS)
+
+
 def _publish_one(page, apath, title, desc, album, visibility_value='1',
                  after_publish_sec=5, upload_timeout_sec=300):
     """Publish a single audio file on the already-open browser page.
     Returns (success: bool, message: str)."""
     page.goto(UPLOAD_URL, timeout=60000)
-    page.wait_for_timeout(4000)
+    # v1.3.0: vary the landing-page settle time so navigation timing is not
+    # perfectly periodic (a fixed rhythm is a classic bot tell).
+    page.wait_for_timeout(4000 + random.randint(0, 1500))
 
     # 1. Choose the file. The upload page now shows a landing page with a
     #    webuploader "上传音频" entry; clicking it opens a native file chooser,
@@ -588,6 +657,12 @@ def _publish_one(page, apath, title, desc, album, visibility_value='1',
     if not _wait_upload_done(page, timeout_sec=upload_timeout_sec):
         return False, "timed out waiting for upload to finish"
 
+    # 6.5 Stop early (instead of wasting the retry budget) if the platform has
+    #     raised a captcha / risk-control challenge on this session.
+    if _blocked(page):
+        return False, ("platform risk-control / captcha challenge detected — "
+                       "stop and retry later (do not keep hammering the UI)")
+
     # 7. Tick the "我已阅读并同意《知识产权承诺》" agreement if present.
     #    The 确认发布 button stays DISABLED until this is checked, which is
     #    exactly why some publishes silently did nothing (page never left
@@ -606,6 +681,11 @@ def _publish_one(page, apath, title, desc, album, visibility_value='1',
     except Exception:
         pass
     page.wait_for_timeout(800)
+
+    # 7.5 Human-like "think time" before committing the publish: a short random
+    #     pause makes the click timing irregular (anti-bot best practice — a
+    #     perfectly steady cadence is a well-known automation signature).
+    page.wait_for_timeout(random.randint(800, 2500))
 
     # 8. Click "确认发布" with retries. The button can be momentarily disabled
     #    while the audio finishes server-side processing, so we wait for it to
@@ -729,8 +809,11 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
                 results.append((title, False, f"{type(e).__name__}: {e}"))
 
             if i < total:
-                print(f"  ⏳ Waiting {config['interval']}s ...")
-                page.wait_for_timeout(config["interval"] * 1000)
+                base = config["interval"]
+                jitter = config.get("interval_jitter") or 0
+                wait = base + random.uniform(0, jitter)
+                print(f"  ⏳ Waiting {wait:.1f}s (base {base}s + jitter {jitter}s) ...")
+                page.wait_for_timeout(int(wait * 1000))
 
         context.close()
 
@@ -748,6 +831,168 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
             fh.write(f"{'✅' if ok else '❌'} {t}\n   {m}\n")
     print(f"结果汇总已写入：{summary_path}")
 
+    # v1.3.0: automatic post-publish verification (completeness + order).
+    verify_failed = False
+    if config.get("verify") and config.get("album_id"):
+        print("\n" + "=" * 60)
+        print("🔎 Verifying published results (completeness + order) ...")
+        verify_failed = verify_publish(folder, config["album_id"],
+                                       config["profile"], config)
+    elif config.get("verify") and not config.get("album_id"):
+        print("\n⚠ Verification skipped: pass --album-id / XIMALAYA_ALBUM_ID "
+              "to enable automatic post-publish verification.")
+
+    return {
+        "success_count": success_count,
+        "total": total,
+        "verify_failed": verify_failed,
+    }
+
+
+def _is_monotonic(seq, ref):
+    """True if `seq` (a permutation of `ref`, in some order) is either strictly
+    ascending or strictly descending relative to `ref`'s order. Used by the
+    'monotonic' verify mode, which accepts a fully reversed list (e.g. a
+    platform that displays newest-first) as long as it is not scrambled."""
+    idx = {t: i for i, t in enumerate(ref)}
+    pos = [idx[t] for t in seq]
+    asc = all(pos[i] < pos[i + 1] for i in range(len(pos) - 1))
+    desc = all(pos[i] > pos[i + 1] for i in range(len(pos) - 1))
+    return asc or desc
+
+
+def verify_publish(folder, album_id, profile, config):
+    """Verify (1) every local audio+txt pair is actually online, and (2) the
+    online order of those sounds matches the intended natural-sorted order.
+
+    Ximalaya's Creator-Center 'sound manage' page lists a track's sounds in
+    *creation (upload) order, oldest first*. So a clean sequential publish in
+    natural order yields an online order identical to the local order; any
+    batch that appended out of order shows up as scrambled here.
+
+    Returns True if verification found a problem (so the caller can exit
+    non-zero / alert), False if everything is fine.
+    """
+    pairs, orphan_audio, orphan_txt = scan_and_pair(folder)
+    prefix = config.get("title_prefix", "")
+    intended = [title_from_audio(b, prefix) for b, _, _ in pairs]  # natural order
+    intended_set = set(intended)
+
+    if not intended:
+        print("  (no local audio+txt pairs to verify)")
+        return False
+
+    # ---- capture the real online titles via the album/tracks API ----
+    captured = []
+
+    def on_resp(resp):
+        if "reform-upload/manage/album/tracks" in resp.url:
+            try:
+                j = resp.json()
+                if isinstance(j, dict) and j.get("ret") == 0:
+                    captured.append(j)
+            except Exception:
+                pass
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("  ⚠ playwright missing — cannot verify online.")
+        return False
+
+    with sync_playwright() as p:
+        ctx = p.chromium.launch_persistent_context(
+            user_data_dir=profile, headless=True)
+        page = ctx.new_page()
+        page.on("response", on_resp)
+        page.goto(
+            f"https://www.ximalaya.com/reform-upload/page/sound/manage/{album_id}",
+            timeout=60000)
+        page.wait_for_timeout(4500)
+        # Page through using the "next" button (robust to windowed pagination).
+        for _ in range(30):
+            nx = page.locator(".ant-pagination-next")
+            if nx.count() == 0:
+                break
+            cls = nx.first.get_attribute("class") or ""
+            if "ant-pagination-disabled" in cls:
+                break
+            try:
+                nx.first.click(timeout=5000)
+                page.wait_for_timeout(2200)
+            except Exception:
+                break
+        ctx.close()
+
+    online = []
+    seen = set()
+    for j in captured:
+        for it in j.get("data", {}).get("infos", []):
+            if isinstance(it, dict) and it.get("title"):
+                t = it["title"]
+                if t not in seen:
+                    seen.add(t)
+                    online.append(t)
+
+    online_set = set(online)
+
+    # ---- 1. completeness ----
+    missing = [t for t in intended if t not in online_set]
+
+    # ---- 2. order (only among this batch's titles, preserving online order) ----
+    batch_online = [t for t in online if t in intended_set]
+    order_mode = config.get("verify_order", "strict")
+    if order_mode == "off":
+        order_ok, order_label = None, "skipped (--verify-order off)"
+    elif order_mode == "monotonic":
+        order_ok = _is_monotonic(batch_online, intended)
+        order_label = "monotonic (asc or desc accepted)"
+    else:  # strict
+        order_ok = (batch_online == intended)
+        order_label = "strict (must equal chapter/natural order)"
+
+    # ---- derive mismatched positions (for reporting) ----
+    mismatches = []
+    if order_ok is False:
+        for i, t in enumerate(batch_online):
+            exp = intended[i] if i < len(intended) else None
+            if t != exp:
+                mismatches.append((i + 1, t,
+                                   intended.index(t) + 1 if t in intended_set else -1))
+
+    # ---- render report ----
+    report = []
+    report.append(f"校验时间：{time.strftime('%Y-%m-%d %H:%M:%S')}")
+    report.append(f"专辑 ID：{album_id}   校验模式：{order_label}")
+    report.append(f"本地配对：{len(intended)}   在线声音：{len(online)}")
+    report.append("")
+    report.append(f"[1] 完整性：{'✅ 全部在线' if not missing else '❌ 缺失 ' + str(len(missing)) + ' 条'}")
+    for m in missing:
+        report.append(f"    缺：{m}")
+    report.append("")
+    if order_ok is None:
+        report.append(f"[2] 顺序：⏭ 未检查（--verify-order off）")
+    elif order_ok:
+        report.append(f"[2] 顺序：✅ 在线顺序与预期一致（{order_label}）")
+    else:
+        report.append(f"[2] 顺序：❌ 在线顺序错乱（{order_label}），共 {len(mismatches)} 处不一致")
+        for pos, t, exp in mismatches[:15]:
+            report.append(f"    在线第{pos}位 = {t}   （应在第{exp}位）")
+        if len(mismatches) > 15:
+            report.append(f"    … 其余 {len(mismatches) - 15} 处省略")
+
+    text = "\n".join(report)
+    print(text)
+
+    report_path = os.path.join(
+        SCRIPT_DIR, f"verify_report_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+    with open(report_path, "w", encoding="utf-8") as fh:
+        fh.write(text + "\n")
+    print(f"校验报告已写入：{report_path}")
+
+    problem = bool(missing) or (order_ok is False)
+    return problem
+
 
 # ----------------------------------------------------------------------
 # Entry point
@@ -763,8 +1008,12 @@ def main():
     if config["dry_run"]:
         dry_run(folder, config)
     else:
-        publish_all(folder, config, skip_confirm=config["yes"],
-                    start_from=config["start_from"])
+        res = publish_all(folder, config, skip_confirm=config["yes"],
+                          start_from=config["start_from"])
+        if res and res.get("verify_failed") and config.get("verify_fail_exit"):
+            print("\n❌ Verification failed (missing or out-of-order sounds). "
+                  "Exiting with status 2 so the run can be flagged/retried.")
+            sys.exit(2)
 
 
 if __name__ == "__main__":

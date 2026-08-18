@@ -114,6 +114,11 @@ python uploader.py --folder my_audio --album "我的专辑" --yes
 | 上传超时（秒）   | `--timeout`         | `XIMALAYA_UPLOAD_TIMEOUT`  | `300`                                    |
 | 发布后等待（秒） | `--after`           | `XIMALAYA_AFTER_PUBLISH`   | `5`                                      |
 | 标题前缀去除     | `--title-prefix`    | `XIMALAYA_TITLE_PREFIX`    | *(空)*                                   |
+| 间隔随机抖动（秒）| `--interval-jitter` | `XIMALAYA_INTERVAL_JITTER` | `7`（`等待 = interval + 随机(0..jitter)`）|
+| 数字专辑 ID      | `-i/--album-id`     | `XIMALAYA_ALBUM_ID`        | *(空，启用自动校验需要)*                 |
+| 关闭自动校验     | `--no-verify`       | `XIMALAYA_VERIFY`          | `true`（发布后自动校验）                 |
+| 顺序校验严格度   | `--verify-order`    | `XIMALAYA_VERIFY_ORDER`    | `strict`（strict/monotonic/off）         |
+| 校验失败不退出   | `--no-verify-fail-exit` | `XIMALAYA_VERIFY_FAIL_EXIT` | `true`（失败以退出码 2 结束）         |
 
 把 `.env.example` 复制为 `.env` 即可在多次运行间保留配置。
 
@@ -139,6 +144,27 @@ python uploader.py --folder my_audio --album "我的专辑" --yes   # 重跑安�
 - `--no-resume` — 完全忽略清单，重新发布全部。
 
 每次运行结束会生成 `published_YYYYMMDD_HHMMSS.txt` 结果汇总，含每项的标题 / 链接 / 时间戳。
+
+### 发布后自动校验（完整性 + 顺序）
+
+从 v1.3.0 起，发布流程结束后会**自动校验**结果（需提供 `--album-id` 才会执行）：
+
+1. **完整性**——本地每个 `音频+同名txt` 配对是否都已真实上线（缺失清单）。
+2. **顺序**——本批声音的在线顺序是否与预期章节 / 自然顺序一致。喜马拉雅声音管理页按"创建时间升序"排列，因此**单次按序连续发布**应严格等于本地顺序；若分多批补发导致穿插，会被判定为"顺序错乱"并逐项列出错位（如"在线第 6 位 = X，应在第 12 位"）。
+
+```bash
+# 启用自动校验（推荐）：传入数字专辑 ID
+python uploader.py -f my_audio -a "我的专辑" -i 128358894 --yes
+
+# 顺序校验模式：strict（默认，必须等于章节顺序）| monotonic（升/降序均可）| off（仅查完整性）
+python uploader.py -f my_audio -a "我的专辑" -i 128358894 --verify-order monotonic --yes
+```
+
+校验发现缺失或错乱时，进程以**退出码 2** 结束（可用 `--no-verify-fail-exit` 降级为仅报告），报告写入 `verify_report_YYYYMMDD_HHMMSS.txt`，便于接入自动化 / CI 告警。
+
+### 上传节奏随机化（抗风控）
+
+两次上传之间的等待由固定 `--interval` 改为 `interval + 随机(0..--interval-jitter)`（默认 `8 + 0~7s`），并在进入上传页、点击「确认发布」前加入随机"思考时间"，避免固定节奏被平台识别为机器流量。喜马拉雅确有请求限流与刷量风控机制，适度随机化可降低触发概率。
 
 ---
 
