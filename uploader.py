@@ -210,6 +210,7 @@ def build_config():
         "verify": True,
         "verify_order": "strict",
         "verify_fail_exit": True,
+        "order": "name",
     }
 
     # 1) .env file, then process environment (env wins over file).
@@ -231,6 +232,7 @@ def build_config():
         "XIMALAYA_VERIFY": "verify",
         "XIMALAYA_VERIFY_ORDER": "verify_order",
         "XIMALAYA_VERIFY_FAIL_EXIT": "verify_fail_exit",
+        "XIMALAYA_ORDER": "order",
     }
     for env_key, cfg_key in key_map.items():
         if env_key in env and env[env_key] != "":
@@ -265,6 +267,13 @@ def build_config():
     parser.add_argument("--after", type=int, dest="after_publish",
                         help="Seconds to wait after clicking publish")
     parser.add_argument("--title-prefix", help="Strip this prefix from titles")
+    parser.add_argument("--order", choices=["name", "preview-first"],
+                        default=None,
+                        help="Publish order: 'name' (default) = ascending natural "
+                             "sort of file names; 'preview-first' = group by "
+                             "chapter, publish 预习 (preview) files before 复习 "
+                             "(review) files within each chapter, then natural "
+                             "sort inside the group. Env: XIMALAYA_ORDER.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Only scan + pair + print, do not publish")
     parser.add_argument("--yes", action="store_true",
@@ -346,6 +355,8 @@ def build_config():
         defaults["verify"] = False
     if args.verify_order is not None:
         defaults["verify_order"] = args.verify_order
+    if args.order is not None:
+        defaults["order"] = args.order
     if args.no_verify_fail_exit:
         defaults["verify_fail_exit"] = False
 
@@ -403,7 +414,36 @@ def natural_key(text):
 # ----------------------------------------------------------------------
 # Scan & pair
 # ----------------------------------------------------------------------
-def scan_and_pair(folder):
+def _chapter_prefix(base):
+    """Return the chapter prefix (e.g. '第1章-相交线与平行线') so that 预习/复习
+    variants of the same chapter group together when sorting."""
+    for marker in ("-预习", "-复习"):
+        idx = base.find(marker)
+        if idx != -1:
+            return base[:idx]
+    return base
+
+
+def _publish_sort_key(base, order):
+    """Sort key for the publish list.
+
+    - 'preview-first': group by chapter, then 预习 (rank 0) before 复习
+      (rank 1) within the chapter, then natural sort inside the group.
+    - 'name' (default): plain natural sort of the file name.
+    """
+    if order == "preview-first":
+        prefix = _chapter_prefix(base)
+        if "预习" in base:
+            rank = 0
+        elif "复习" in base:
+            rank = 1
+        else:
+            rank = 2
+        return (prefix, rank, natural_key(base))
+    return natural_key(base)
+
+
+def scan_and_pair(folder, order="name"):
     """Return (pairs, orphan_audio, orphan_txt).
 
     pairs        : list of (base, audio_path, txt_path)
@@ -432,9 +472,10 @@ def scan_and_pair(folder):
         if base not in audio_files:
             orphan_txt.append((base, tpath))
 
-    # Publish in ascending natural order of file name.
-    pairs.sort(key=lambda x: natural_key(x[0]))
-    orphan_audio.sort(key=lambda x: natural_key(x[0]))
+    # Publish order: 'preview-first' groups by chapter and puts 预习 before 复习;
+    # 'name' (default) is a plain ascending natural sort of the file name.
+    pairs.sort(key=lambda x: _publish_sort_key(x[0], order))
+    orphan_audio.sort(key=lambda x: _publish_sort_key(x[0], order))
     return pairs, orphan_audio, orphan_txt
 
 
@@ -455,11 +496,13 @@ def title_from_audio(base, prefix=""):
 # Dry run report
 # ----------------------------------------------------------------------
 def dry_run(folder, config):
-    pairs, orphan_audio, orphan_txt = scan_and_pair(folder)
+    pairs, orphan_audio, orphan_txt = scan_and_pair(folder, config.get("order", "name"))
     prefix = config["title_prefix"]
+    order_mode = config.get("order", "name")
     print("=" * 60)
     print(f"Dry run scan: {folder}")
-    print(f"Publish order: ascending natural sort of file names")
+    print(f"Publish order: "
+          f"{'preview-first (预习 before 复习, grouped by chapter)' if order_mode == 'preview-first' else 'ascending natural sort of file names'}")
     print(f"Visibility  : {config['visibility']} "
           f"({'仅自己可见' if config['visibility'] == 'private' else '公开' if config['visibility'] == 'public' else '仅粉丝可见'})")
     print(f"Matched pairs (audio + txt): {len(pairs)}")
@@ -730,7 +773,7 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
               "    pip install playwright && playwright install chromium")
         sys.exit(1)
 
-    pairs, orphan_audio, orphan_txt = scan_and_pair(folder)
+    pairs, orphan_audio, orphan_txt = scan_and_pair(folder, config.get("order", "name"))
     if not pairs:
         print("No matched audio+txt pairs found, nothing to do.")
         return
@@ -863,7 +906,8 @@ def _is_monotonic(seq, ref):
 
 def verify_publish(folder, album_id, profile, config):
     """Verify (1) every local audio+txt pair is actually online, and (2) the
-    online order of those sounds matches the intended natural-sorted order.
+    online order of those sounds matches the intended order (natural sort, or
+    preview-first when --order preview-first is used).
 
     Ximalaya's Creator-Center 'sound manage' page lists a track's sounds in
     *creation (upload) order, oldest first*. So a clean sequential publish in
@@ -873,9 +917,9 @@ def verify_publish(folder, album_id, profile, config):
     Returns True if verification found a problem (so the caller can exit
     non-zero / alert), False if everything is fine.
     """
-    pairs, orphan_audio, orphan_txt = scan_and_pair(folder)
+    pairs, orphan_audio, orphan_txt = scan_and_pair(folder, config.get("order", "name"))
     prefix = config.get("title_prefix", "")
-    intended = [title_from_audio(b, prefix) for b, _, _ in pairs]  # natural order
+    intended = [title_from_audio(b, prefix) for b, _, _ in pairs]  # per --order
     intended_set = set(intended)
 
     if not intended:

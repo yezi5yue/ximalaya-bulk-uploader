@@ -4,6 +4,20 @@
 
 ---
 
+## [v1.5.0] — 2026-08-24（新增 `--order preview-first`：同章内预习先于复习发布）
+
+### 新增：发布顺序控制 `--order`
+- `uploader.py`：新增 `--order`（默认 `name`，可选 `preview-first`），并通过环境变量 `XIMALAYA_ORDER` 配置。
+- `preview-first` 模式下，上传器按**章节分组**，同一章内**先发布"预习"文件、再发布"复习"文件**，章内其余按自然顺序。适用于文件同时含"预习"/"复习"两类、且希望"先预习后复习"的场景。
+- 实现：新增 `_chapter_prefix()` / `_publish_sort_key()`，`scan_and_pair()` 增加 `order` 参数，`dry_run` / `publish_all` / `verify_publish` 同步生效（发布顺序与校验顺序一致）。
+- 之所以需要显式选项：纯文件名自然排序时"复习"会排在"预习"前（"复" U+590D < "预" U+9884），无法靠文件名排序得到"预习在前"。
+
+### 文档
+- `README.md`：配置表新增"发布顺序"行；新增「发布顺序（预习优先）」小节；近期版本速览追加 v1.5.0。
+- `.env.example`：新增 `XIMALAYA_ORDER` 说明。
+
+---
+
 ## [v1.4.0] — 2026-08-18（新增 reorder_album.py：不删除重发，按文件名重排专辑顺序）
 
 ### 新增：专辑内声音排序脚本 `reorder_album.py`

@@ -27,6 +27,7 @@
 完整的版本更新记录维护在 [CHANGELOG.md](CHANGELOG.md)。
 
 近期版本速览：
+- **v1.5.0（2026-08-24）** — 新增 `--order preview-first`：按章节分组、同章内"预习"先于"复习"发布。
 - **v1.4.0（2026-08-18）** — 新增 `reorder_album.py`：不删除重发，按文件名重排专辑内声音顺序。
 - **v1.3.0（2026-08-18）** — 上传节奏随机化（抗风控）+ 发布后自动校验完整性/顺序。
 - **v1.2.2（2026-08-18）** — 修复「确认发布」按钮置灰导致静默失败。
@@ -118,6 +119,7 @@ python uploader.py --folder my_audio --album "我的专辑" --yes
 | 上传超时（秒）   | `--timeout`         | `XIMALAYA_UPLOAD_TIMEOUT`  | `300`                                    |
 | 发布后等待（秒） | `--after`           | `XIMALAYA_AFTER_PUBLISH`   | `5`                                      |
 | 标题前缀去除     | `--title-prefix`    | `XIMALAYA_TITLE_PREFIX`    | *(空)*                                   |
+| 发布顺序         | `--order`           | `XIMALAYA_ORDER`           | `name`（name / preview-first）           |
 | 间隔随机抖动（秒）| `--interval-jitter` | `XIMALAYA_INTERVAL_JITTER` | `7`（`等待 = interval + 随机(0..jitter)`）|
 | 数字专辑 ID      | `-i/--album-id`     | `XIMALAYA_ALBUM_ID`        | *(空，启用自动校验需要)*                 |
 | 关闭自动校验     | `--no-verify`       | `XIMALAYA_VERIFY`          | `true`（发布后自动校验）                 |
@@ -133,6 +135,16 @@ python uploader.py --folder my_audio --album "我的专辑" --yes
 ### 标题前缀
 
 如果你的文件名为 `Pod-01.mp3`，但希望发布标题只保留 `01`，设置 `--title-prefix "Pod-"`。留空则保留完整文件名。
+
+### 发布顺序（预习优先）
+
+默认按文件名的自然顺序发布。若文件同时含"预习"与"复习"两类（如 `第1章-…-预习-01-…` 与 `第1章-…-复习-01-…`），加 `--order preview-first`：上传器会**按章节分组，同一章内先发"预习"再发"复习"**，章内其余仍按自然顺序。因为喜马拉雅按"创建时间升序"排列，这样发布后专辑内顺序即 `章1预习 → 章1复习 → 章2预习 → …`。
+
+```bash
+python uploader.py -f my_audio -a "我的专辑" --order preview-first --yes
+```
+
+> 说明：纯文件名自然排序时"复习"会排在"预习"前面（"复"的 Unicode 小于"预"），所以"预习先于复习"必须通过本选项显式指定，不能靠文件名排序实现。
 
 ### 续传 / 跳过
 
