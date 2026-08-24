@@ -267,13 +267,16 @@ def build_config():
     parser.add_argument("--after", type=int, dest="after_publish",
                         help="Seconds to wait after clicking publish")
     parser.add_argument("--title-prefix", help="Strip this prefix from titles")
-    parser.add_argument("--order", choices=["name", "preview-first"],
+    parser.add_argument("--order", choices=["name", "preview-first", "chapter-first"],
                         default=None,
                         help="Publish order: 'name' (default) = ascending natural "
                              "sort of file names; 'preview-first' = group by "
                              "chapter, publish 预习 (preview) files before 复习 "
                              "(review) files within each chapter, then natural "
-                             "sort inside the group. Env: XIMALAYA_ORDER.")
+                             "sort inside the group; 'chapter-first' = sort by "
+                             "chapter number (第一单元, 第二单元 ...) ascending, "
+                             "files without a chapter marker go last. Env: "
+                             "XIMALAYA_ORDER.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Only scan + pair + print, do not publish")
     parser.add_argument("--yes", action="store_true",
@@ -424,13 +427,31 @@ def _chapter_prefix(base):
     return base
 
 
+# Chapter markers we recognise in file names: 第一单元, 第3章, 第二课, etc.
+_CHAPTER_RE = re.compile(r"第([0-9零一二两三四五六七八九十百千]+)[单元章课]")
+
+
+def _extract_chapter(base):
+    """Return the integer chapter number if the file name contains a marker
+    such as '第一单元', '第3章', '第二课'; otherwise return None."""
+    m = _CHAPTER_RE.search(base)
+    if m:
+        return _cn_to_int(m.group(1))
+    return None
+
+
 def _publish_sort_key(base, order):
     """Sort key for the publish list.
 
+    - 'chapter-first': ascending by chapter number (第一单元 < 第二单元 ...);
+      files without a chapter marker are placed at the end, then natural sort.
     - 'preview-first': group by chapter, then 预习 (rank 0) before 复习
       (rank 1) within the chapter, then natural sort inside the group.
     - 'name' (default): plain natural sort of the file name.
     """
+    if order == "chapter-first":
+        ch = _extract_chapter(base)
+        return (ch if ch is not None else float("inf"), natural_key(base))
     if order == "preview-first":
         prefix = _chapter_prefix(base)
         if "预习" in base:
@@ -501,8 +522,13 @@ def dry_run(folder, config):
     order_mode = config.get("order", "name")
     print("=" * 60)
     print(f"Dry run scan: {folder}")
-    print(f"Publish order: "
-          f"{'preview-first (预习 before 复习, grouped by chapter)' if order_mode == 'preview-first' else 'ascending natural sort of file names'}")
+    if order_mode == "preview-first":
+        order_label = "preview-first (预习 before 复习, grouped by chapter)"
+    elif order_mode == "chapter-first":
+        order_label = "chapter-first (chapter number ascending, no-chapter files last)"
+    else:
+        order_label = "ascending natural sort of file names"
+    print(f"Publish order: {order_label}")
     print(f"Visibility  : {config['visibility']} "
           f"({'仅自己可见' if config['visibility'] == 'private' else '公开' if config['visibility'] == 'public' else '仅粉丝可见'})")
     no_desc = sum(1 for _, _, tp in pairs if tp is None)

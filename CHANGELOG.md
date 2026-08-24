@@ -1,6 +1,20 @@
 # 版本更新说明（Changelog）
 
-本文件记录 `ximalaya-bulk-uploader` 的所有版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+本文件记录 `ximalaya-bulk-uploader` 的所有版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/）。
+
+---
+
+## [v1.7.0] — 2026-08-25（新增 `--order chapter-first`：按章节顺序发布，无章节的音频排最后）
+
+### 新增：章节优先发布顺序
+- `uploader.py`：`--order` 新增可选值 `chapter-first`。
+- `chapter-first` 模式下，上传器按文件名中的章节号（如 `第一单元`、`第二单元`）升序发布；不带章节标记的音频排在最后，章内/无章节组内再按自然顺序排序。
+- 实现：新增 `_CHAPTER_RE` 与 `_extract_chapter()`，`_publish_sort_key()` 返回 `(chapter_number, natural_key)`，`dry_run` / `publish_all` / `verify_publish` 同步生效。
+- 适用场景：语文、英语等按"单元/章"组织的课文音频，需要"从第一章开始按顺序上传"且散篇排在末尾。
+
+### 文档
+- `README.md`：配置表与 CLI 说明同步新增 `chapter-first`。
+- `.env.example`：`XIMALAYA_ORDER` 说明追加 `chapter-first`。
 
 ---
 

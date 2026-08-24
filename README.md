@@ -27,6 +27,8 @@
 完整的版本更新记录维护在 [CHANGELOG.md](CHANGELOG.md)。
 
 近期版本速览：
+- **v1.7.0（2026-08-25）** — 新增 `--order chapter-first`：按章节号升序发布，无章节的音频排最后。
+- **v1.6.0（2026-08-24）** — 支持纯音频发布：无配套 `.txt` 也能上传。
 - **v1.5.0（2026-08-24）** — 新增 `--order preview-first`：按章节分组、同章内"预习"先于"复习"发布。
 - **v1.4.0（2026-08-18）** — 新增 `reorder_album.py`：不删除重发，按文件名重排专辑内声音顺序。
 - **v1.3.0（2026-08-18）** — 上传节奏随机化（抗风控）+ 发布后自动校验完整性/顺序。
@@ -119,7 +121,7 @@ python uploader.py --folder my_audio --album "我的专辑" --yes
 | 上传超时（秒）   | `--timeout`         | `XIMALAYA_UPLOAD_TIMEOUT`  | `300`                                    |
 | 发布后等待（秒） | `--after`           | `XIMALAYA_AFTER_PUBLISH`   | `5`                                      |
 | 标题前缀去除     | `--title-prefix`    | `XIMALAYA_TITLE_PREFIX`    | *(空)*                                   |
-| 发布顺序         | `--order`           | `XIMALAYA_ORDER`           | `name`（name / preview-first）           |
+| 发布顺序         | `--order`           | `XIMALAYA_ORDER`           | `name`（name / preview-first / chapter-first） |
 | 间隔随机抖动（秒）| `--interval-jitter` | `XIMALAYA_INTERVAL_JITTER` | `7`（`等待 = interval + 随机(0..jitter)`）|
 | 数字专辑 ID      | `-i/--album-id`     | `XIMALAYA_ALBUM_ID`        | *(空，启用自动校验需要)*                 |
 | 关闭自动校验     | `--no-verify`       | `XIMALAYA_VERIFY`          | `true`（发布后自动校验）                 |
@@ -145,6 +147,14 @@ python uploader.py -f my_audio -a "我的专辑" --order preview-first --yes
 ```
 
 > 说明：纯文件名自然排序时"复习"会排在"预习"前面（"复"的 Unicode 小于"预"），所以"预习先于复习"必须通过本选项显式指定，不能靠文件名排序实现。
+
+### 发布顺序（章节优先）
+
+如果文件按"单元/章"组织（如 `第一单元-…`、`第二单元-…`），并且还有一些没有章节标记的散篇需要排最后，加 `--order chapter-first`：上传器会**按章节号升序发布，不带章节标记的音频排在最后**，章内/散篇内部仍按自然顺序。发布后专辑内顺序即 `第一单元 → 第二单元 → … → 散篇`。
+
+```bash
+python uploader.py -f my_audio -a "我的专辑" --order chapter-first --yes
+```
 
 ### 续传 / 跳过
 
