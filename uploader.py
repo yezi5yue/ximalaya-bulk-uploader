@@ -446,9 +446,11 @@ def _publish_sort_key(base, order):
 def scan_and_pair(folder, order="name"):
     """Return (pairs, orphan_audio, orphan_txt).
 
-    pairs        : list of (base, audio_path, txt_path)
-    orphan_audio : list of (base, audio_path)   audio without a txt
-    orphan_txt   : list of (base, txt_path)     txt without an audio
+    pairs        : list of (base, audio_path, txt_path) — txt_path may be None
+                   (audio-only; published with an empty description).
+    orphan_audio : list of (base, audio_path) — reserved; currently always
+                   empty because every audio file is published (txt optional).
+    orphan_txt   : list of (base, txt_path) — txt without a matching audio.
     """
     audio_files, txt_files = {}, {}
     for name in sorted(os.listdir(folder)):
@@ -464,10 +466,9 @@ def scan_and_pair(folder, order="name"):
 
     pairs, orphan_audio, orphan_txt = [], [], []
     for base, apath in audio_files.items():
-        if base in txt_files:
-            pairs.append((base, apath, txt_files[base]))
-        else:
-            orphan_audio.append((base, apath))
+        # txt is optional: publish the audio even without a matching description
+        # file (common for listening-audio batches that ship no separate notes).
+        pairs.append((base, apath, txt_files.get(base)))
     for base, tpath in txt_files.items():
         if base not in audio_files:
             orphan_txt.append((base, tpath))
@@ -475,7 +476,6 @@ def scan_and_pair(folder, order="name"):
     # Publish order: 'preview-first' groups by chapter and puts 预习 before 复习;
     # 'name' (default) is a plain ascending natural sort of the file name.
     pairs.sort(key=lambda x: _publish_sort_key(x[0], order))
-    orphan_audio.sort(key=lambda x: _publish_sort_key(x[0], order))
     return pairs, orphan_audio, orphan_txt
 
 
@@ -505,12 +505,12 @@ def dry_run(folder, config):
           f"{'preview-first (预习 before 复习, grouped by chapter)' if order_mode == 'preview-first' else 'ascending natural sort of file names'}")
     print(f"Visibility  : {config['visibility']} "
           f"({'仅自己可见' if config['visibility'] == 'private' else '公开' if config['visibility'] == 'public' else '仅粉丝可见'})")
-    print(f"Matched pairs (audio + txt): {len(pairs)}")
-    print(f"Audio without txt: {len(orphan_audio)}")
+    no_desc = sum(1 for _, _, tp in pairs if tp is None)
+    print(f"Files to publish: {len(pairs)}  (audio-only / no txt: {no_desc})")
     print(f"Txt without audio: {len(orphan_txt)}")
     print("=" * 60)
     for i, (base, apath, tpath) in enumerate(pairs, 1):
-        desc = read_description(tpath)
+        desc = read_description(tpath) if tpath else ""
         final = title_from_audio(base, prefix)
         if final != base:
             print(f"\n[{i}] Title: {final}   (original: {base})")
@@ -518,10 +518,9 @@ def dry_run(folder, config):
             print(f"\n[{i}] Title: {final}")
         print(f"    audio : {apath}")
         print(f"    desc  ({len(desc)} chars): {desc[:80]}{'…' if len(desc) > 80 else ''}")
-    if orphan_audio:
-        print("\n⚠ Audio without a same-named txt (will be skipped):")
-        for base, apath in orphan_audio:
-            print(f"    - {apath}")
+    if no_desc:
+        print(f"\nℹ {no_desc} file(s) have no matching txt and will be published "
+              f"with an empty description.")
     if orphan_txt:
         print("\n⚠ Txt without a same-named audio (ignored):")
         for base, tpath in orphan_txt:
@@ -543,8 +542,10 @@ def request_confirm(folder, album, pairs, orphan_audio, orphan_txt, config):
     print(f"Will publish {len(pairs)} items in this order:")
     for i, (base, _, _) in enumerate(pairs, 1):
         print(f"  {i:>3}. {title_from_audio(base, prefix)}")
-    if orphan_audio:
-        print(f"({len(orphan_audio)} audio files have no txt and will be skipped)")
+    no_desc = sum(1 for _, _, tp in pairs if tp is None)
+    if no_desc:
+        print(f"({no_desc} audio files have no matching txt and will be "
+              f"published with an empty description)")
     if orphan_txt:
         print(f"({len(orphan_txt)} txt files have no audio and will be ignored)")
     print("=" * 64)
@@ -830,7 +831,7 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
                 results.append((title, True, "skipped (already in manifest)"))
                 continue
 
-            desc = read_description(tpath)
+            desc = read_description(tpath) if tpath else ""
             print(f"\n[{i}/{total}] Publishing: {title}")
             try:
                 ok, msg = _publish_one(
@@ -923,7 +924,7 @@ def verify_publish(folder, album_id, profile, config):
     intended_set = set(intended)
 
     if not intended:
-        print("  (no local audio+txt pairs to verify)")
+        print("  (no local audio files to verify)")
         return False
 
     # ---- capture the real online titles via the album/tracks API ----
