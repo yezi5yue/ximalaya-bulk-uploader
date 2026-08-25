@@ -35,7 +35,7 @@ for spec in "${JOBS[@]}"; do
     --album-id "$album_id" \
     --profile "$PROFILE" \
     --order chapter-first \
-    --visibility public \
+    --visibility private \
     --yes \
     >> "$LOG" 2>&1
 

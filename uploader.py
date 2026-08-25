@@ -625,15 +625,38 @@ def _set_description(page, desc):
 
 
 def _set_privacy(page, value='1'):
-    """Select the visibility radio button (1=private, 2=public, 3=fans)."""
+    """Select the visibility radio button (1=private, 2=public, 3=fans).
+
+    Robustness: we scope the search to the '权限设置' form item so a future
+    unrelated radio with the same value (e.g. value='1') cannot be mis-clicked.
+    We also VERIFY that the target radio actually shows the antd
+    `ant-radio-checked` class after the click. If it does not, we return
+    ok:false so the caller aborts the publish loudly instead of silently
+    publishing with the platform default (公开 / public).
+
+    The Ximalaya upload form defaults the 权限设置 radio to 公开 (public).
+    The *only* thing that makes a sound private is an explicit, verified click
+    on the 私密 (value='1') radio — so we must never assume it stuck."""
     return page.evaluate(
         """(value) => {
-            const input = document.querySelector('input.ant-radio-input[value="' + value + '"]');
-            if (!input) return {ok:false, reason:'radio value=' + value + ' not found'};
+            const items = Array.from(document.querySelectorAll('.ant-form-item'))
+                .filter(it => {
+                    const l = it.querySelector('.ant-form-item-label');
+                    return l && /权限设置/.test(l.innerText);
+                });
+            if (!items.length) return {ok:false, reason:'权限设置 form item not found'};
+            const item = items[0];
+            const radios = Array.from(item.querySelectorAll('input.ant-radio-input'));
+            const input = radios.find(r => r.value === value);
+            if (!input) return {ok:false, reason:'visibility radio value=' + value + ' not found'};
             const label = input.closest('label.ant-radio-wrapper');
             if (label) label.click();
-            input.checked = true;
-            input.dispatchEvent(new Event('change', {bubbles:true}));
+            else input.click();
+            // Re-read the checked wrapper to confirm the UI actually moved.
+            const wrap = input.closest('.ant-radio-wrapper');
+            const dot = wrap ? wrap.querySelector('.ant-radio') : null;
+            const checked = dot ? dot.classList.contains('ant-radio-checked') : input.checked;
+            if (!checked) return {ok:false, reason:'visibility radio did not become checked'};
             return {ok:true, labelText: label ? label.innerText.trim() : ''};
         }""",
         value,
