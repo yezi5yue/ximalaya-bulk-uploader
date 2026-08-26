@@ -582,13 +582,55 @@ def request_confirm(folder, album, pairs, orphan_audio, orphan_txt, config):
 # ----------------------------------------------------------------------
 # Browser publishing helpers (site-specific selectors, verified working)
 # ----------------------------------------------------------------------
-def _select_album(page, album_name, timeout=10000):
-    """Open the album picker and choose the target album."""
+def _select_album(page, album_name, timeout=20000):
+    """Open the album picker and choose the target album by EXACT title.
+
+    The picker is paginated (loads ~10 albums per page) and a naive substring
+    match (has-text) previously selected '英语作文' when the user meant '作文'
+    (see issue #album-selection-2026-08-26). We therefore:
+      1. match the title span EXACTLY via :text-is (so '作文' != '英语作文');
+      2. scroll / click "加载更多" to load every page until the exact item
+         appears (the intended album may be several pages deep);
+      3. click it. If it never appears we raise (and the batch aborts) instead
+         of silently picking the wrong album.
+    """
     page.locator("button.search-select-album-btn-2fDgDdbT").first.click()
     page.wait_for_timeout(800)
-    item_sel = f"div.scroll-item-content-252FXLKk:has-text('{album_name}')"
-    page.locator(item_sel).first.wait_for(timeout=timeout)
-    page.locator(item_sel).first.click()
+
+    title_sel = f"span.album-title-text-4EH5AG-r:text-is('{album_name}')"
+    loaded = False
+    for _ in range(25):
+        if page.locator(title_sel).count() > 0:
+            loaded = True
+            break
+        # Try a "加载更多" (load more) button first.
+        more = page.locator("button:has-text('加载更多'), div:has-text('加载更多')").first
+        clicked = False
+        try:
+            if more.count() and more.is_visible(timeout=400):
+                more.click()
+                clicked = True
+                page.wait_for_timeout(600)
+        except Exception:
+            pass
+        if not clicked:
+            # Otherwise scroll the nearest scrollable ancestor of the items.
+            page.evaluate(
+                "() => { const el = document.querySelector('span.album-title-text-4EH5AG-r');"
+                " if(!el) return; let p = el; for(let k=0;k<8;k++){ p = p.parentElement;"
+                " if(!p) break; if(p.scrollHeight > p.clientHeight){ p.scrollTop = p.scrollHeight; return; } }"
+                " window.scrollTo(0, document.body.scrollHeight); }")
+            page.wait_for_timeout(600)
+
+    if not loaded:
+        seen = page.evaluate(
+            "() => Array.from(document.querySelectorAll('span.album-title-text-4EH5AG-r'))"
+            ".map(e => e.innerText)")
+        raise RuntimeError(
+            f"Album '{album_name}' not found in the picker after loading all pages. "
+            f"Albums visible: {seen}")
+
+    page.locator(title_sel).first.click()
     page.wait_for_timeout(600)
 
 
@@ -890,6 +932,22 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
                     upload_timeout_sec=config["upload_timeout"],
                 )
                 if ok:
+                    # Safety net: confirm the publish actually landed in the
+                    # intended album. The success URL embeds the album id
+                    # (/sound/manage/<albumId>); if it differs from --album-id
+                    # we abort the whole batch instead of mis-publishing the
+                    # remaining items to the wrong album.
+                    expected_id = config.get("album_id")
+                    if expected_id is not None:
+                        m = re.search(r"/manage/(\d+)", msg or "")
+                        got_id = m.group(1) if m else None
+                        if got_id is not None and str(got_id) != str(expected_id):
+                            print(f"\n❌ SAFETY ABORT: track was published to "
+                                  f"album {got_id}, but the intended album is "
+                                  f"{expected_id}. Stopping now to avoid "
+                                  f"mis-publishing the rest of the batch.")
+                            context.close()
+                            sys.exit(1)
                     ts = record_published(title, msg)  # P1-3: journal it
                     success_count += 1
                     print(f"  ✅ Success: {msg}  ({ts})")
