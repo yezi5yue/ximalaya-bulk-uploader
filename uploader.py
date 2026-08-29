@@ -277,6 +277,13 @@ def build_config():
                              "chapter number (第一单元, 第二单元 ...) ascending, "
                              "files without a chapter marker go last. Env: "
                              "XIMALAYA_ORDER.")
+    parser.add_argument("--custom-order-file",
+                        help="Path to a text file that lists audio basenames (one "
+                             "per line, without extension, # for comments). Files "
+                             "present in the folder and listed in this file are "
+                             "published in that exact order; any remaining files "
+                             "are appended in their original sort order. This "
+                             "overrides --order for the listed items.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Only scan + pair + print, do not publish")
     parser.add_argument("--yes", action="store_true",
@@ -360,6 +367,8 @@ def build_config():
         defaults["verify_order"] = args.verify_order
     if args.order is not None:
         defaults["order"] = args.order
+    if args.custom_order_file is not None:
+        defaults["custom_order_file"] = args.custom_order_file
     if args.no_verify_fail_exit:
         defaults["verify_fail_exit"] = False
 
@@ -464,7 +473,7 @@ def _publish_sort_key(base, order):
     return natural_key(base)
 
 
-def scan_and_pair(folder, order="name"):
+def scan_and_pair(folder, order="name", custom_order_file=None):
     """Return (pairs, orphan_audio, orphan_txt).
 
     pairs        : list of (base, audio_path, txt_path) — txt_path may be None
@@ -496,7 +505,29 @@ def scan_and_pair(folder, order="name"):
 
     # Publish order: 'preview-first' groups by chapter and puts 预习 before 复习;
     # 'name' (default) is a plain ascending natural sort of the file name.
-    pairs.sort(key=lambda x: _publish_sort_key(x[0], order))
+    # If a custom order file is provided, listed basenames take precedence.
+    custom_order = None
+    if custom_order_file and os.path.isfile(custom_order_file):
+        custom_order = []
+        with open(custom_order_file, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    custom_order.append(line)
+
+    if custom_order:
+        order_map = {name: idx for idx, name in enumerate(custom_order)}
+
+        def _sort_key(item):
+            base = item[0]
+            if base in order_map:
+                return (0, order_map[base])
+            # Unlisted files appended after listed ones, in their normal order.
+            return (1, _publish_sort_key(base, order))
+
+        pairs.sort(key=_sort_key)
+    else:
+        pairs.sort(key=lambda x: _publish_sort_key(x[0], order))
     return pairs, orphan_audio, orphan_txt
 
 
@@ -517,7 +548,8 @@ def title_from_audio(base, prefix=""):
 # Dry run report
 # ----------------------------------------------------------------------
 def dry_run(folder, config):
-    pairs, orphan_audio, orphan_txt = scan_and_pair(folder, config.get("order", "name"))
+    pairs, orphan_audio, orphan_txt = scan_and_pair(
+        folder, config.get("order", "name"), config.get("custom_order_file"))
     prefix = config["title_prefix"]
     order_mode = config.get("order", "name")
     print("=" * 60)
@@ -865,7 +897,8 @@ def publish_all(folder, config, skip_confirm=False, start_from=1):
               "    pip install playwright && playwright install chromium")
         sys.exit(1)
 
-    pairs, orphan_audio, orphan_txt = scan_and_pair(folder, config.get("order", "name"))
+    pairs, orphan_audio, orphan_txt = scan_and_pair(
+        folder, config.get("order", "name"), config.get("custom_order_file"))
     if not pairs:
         print("No matched audio+txt pairs found, nothing to do.")
         return
@@ -1025,7 +1058,8 @@ def verify_publish(folder, album_id, profile, config):
     Returns True if verification found a problem (so the caller can exit
     non-zero / alert), False if everything is fine.
     """
-    pairs, orphan_audio, orphan_txt = scan_and_pair(folder, config.get("order", "name"))
+    pairs, orphan_audio, orphan_txt = scan_and_pair(
+        folder, config.get("order", "name"), config.get("custom_order_file"))
     prefix = config.get("title_prefix", "")
     intended = [title_from_audio(b, prefix) for b, _, _ in pairs]  # per --order
     intended_set = set(intended)
