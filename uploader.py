@@ -130,6 +130,40 @@ def _enter_form(page, key_file):
     page.wait_for_timeout(800)
 
 
+def _ensure_album_loaded(page, album_name, max_scrolls=25):
+    """Scroll / "load more" the paginated album picker until EXACT title shows.
+
+    The picker renders only ~10 albums at a time, so an album several pages
+    deep (e.g. 作文) is invisible on first paint. This helper is shared by
+    check_album_exists() and _select_album() so the pre-check can never
+    disagree with the real selection.
+    Returns True if an item titled exactly `album_name` is present.
+    """
+    title_sel = f"span.album-title-text-4EH5AG-r:text-is('{album_name}')"
+    for _ in range(max_scrolls):
+        if page.locator(title_sel).count() > 0:
+            return True
+        # Prefer an explicit "加载更多" button when the picker offers one.
+        more = page.locator("button:has-text('加载更多'), div:has-text('加载更多')").first
+        clicked = False
+        try:
+            if more.count() and more.is_visible(timeout=400):
+                more.click()
+                clicked = True
+                page.wait_for_timeout(600)
+        except Exception:
+            pass
+        if not clicked:
+            # Fall back to scrolling the nearest scrollable ancestor.
+            page.evaluate(
+                "() => { const el = document.querySelector('span.album-title-text-4EH5AG-r');"
+                " if(!el) return; let p = el; for(let k=0;k<8;k++){ p = p.parentElement;"
+                " if(!p) break; if(p.scrollHeight > p.clientHeight){ p.scrollTop = p.scrollHeight; return; } }"
+                " window.scrollTo(0, document.body.scrollHeight); }")
+            page.wait_for_timeout(600)
+    return False
+
+
 def check_album_exists(page, album_name, key_file=None, timeout=10000):
     """Open the album picker and verify the target album is listed.
 
@@ -156,7 +190,14 @@ def check_album_exists(page, album_name, key_file=None, timeout=10000):
             return False
     try:
         page.locator("button.search-select-album-btn-2fDgDdbT").first.click()
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(800)
+        # Must page through the picker: albums beyond the first ~10 are not
+        # rendered until scrolled into view (pagination bug 2026-09-16: the
+        # pre-check wrongly reported "Album not found" for 作文).
+        if _ensure_album_loaded(page, album_name):
+            return True
+        # Defensive fallback: exact-span matching may miss if the markup
+        # changes; fall back to a substring scan of everything loaded so far.
         items = page.locator("div.scroll-item-content-252FXLKk").all_inner_texts()
         return any(album_name in t for t in items)
     except Exception:
@@ -630,31 +671,9 @@ def _select_album(page, album_name, timeout=20000):
     page.wait_for_timeout(800)
 
     title_sel = f"span.album-title-text-4EH5AG-r:text-is('{album_name}')"
-    loaded = False
-    for _ in range(25):
-        if page.locator(title_sel).count() > 0:
-            loaded = True
-            break
-        # Try a "加载更多" (load more) button first.
-        more = page.locator("button:has-text('加载更多'), div:has-text('加载更多')").first
-        clicked = False
-        try:
-            if more.count() and more.is_visible(timeout=400):
-                more.click()
-                clicked = True
-                page.wait_for_timeout(600)
-        except Exception:
-            pass
-        if not clicked:
-            # Otherwise scroll the nearest scrollable ancestor of the items.
-            page.evaluate(
-                "() => { const el = document.querySelector('span.album-title-text-4EH5AG-r');"
-                " if(!el) return; let p = el; for(let k=0;k<8;k++){ p = p.parentElement;"
-                " if(!p) break; if(p.scrollHeight > p.clientHeight){ p.scrollTop = p.scrollHeight; return; } }"
-                " window.scrollTo(0, document.body.scrollHeight); }")
-            page.wait_for_timeout(600)
-
-    if not loaded:
+    # Shared pagination helper (same one the pre-check uses), so the pre-check
+    # and the actual selection can never disagree about what is visible.
+    if not _ensure_album_loaded(page, album_name):
         seen = page.evaluate(
             "() => Array.from(document.querySelectorAll('span.album-title-text-4EH5AG-r'))"
             ".map(e => e.innerText)")
