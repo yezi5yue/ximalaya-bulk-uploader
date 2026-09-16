@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>在喜马拉雅 App 中打开</title>
+<style>
+:root{color-scheme:light dark}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+     font:16px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+     background:#f5f5f7;color:#1d1d1f;padding:24px;-webkit-text-size-adjust:100%}
+.card{width:100%;max-width:380px;background:#fff;border-radius:16px;padding:28px 24px;text-align:center;
+      box-shadow:0 2px 16px rgba(0,0,0,.06)}
+.badge{display:inline-block;font-size:12px;padding:3px 10px;border-radius:999px;
+       background:#fff1ec;color:#c2401f;margin-bottom:14px}
+h1{font-size:19px;font-weight:600;margin:0 0 8px;line-height:1.4;word-break:break-word}
+p{font-size:14px;color:#6e6e73;margin:0 0 20px}
+.btn{display:block;width:100%;padding:15px;border:0;border-radius:12px;background:#f86442;color:#fff;
+     font-size:16px;font-weight:600;text-decoration:none;cursor:pointer;
+     -webkit-tap-highlight-color:transparent}
+.btn:active{opacity:.85}
+.hint{font-size:13px;color:#86868b;margin-top:20px;line-height:1.75;text-align:left}
+.hint b{color:#1d1d1f;font-weight:600}
+.warn{display:none;margin-top:16px;padding:12px 14px;border-radius:10px;background:#fff4e5;
+      color:#8a5300;font-size:13px;text-align:left;line-height:1.7}
+.err{display:none;margin-top:16px;padding:12px 14px;border-radius:10px;background:#fdeaea;
+     color:#a32d2d;font-size:13px;text-align:left;line-height:1.7}
+@media (prefers-color-scheme:dark){
+ body{background:#000;color:#f5f5f7}
+ .card{background:#1c1c1e;box-shadow:none}
+ p{color:#98989d}
+ .badge{background:#3a1f16;color:#ff9d7a}
+ .hint{color:#8e8e93}.hint b{color:#f5f5f7}
+ .warn{background:#3a2a10;color:#ffcf8a}
+ .err{background:#3a1a1a;color:#ff9d9d}
+}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="badge" id="badge">喜马拉雅</div>
+  <h1 id="title">在 App 中打开</h1>
+  <p id="sub">正在尝试唤起喜马拉雅 App…</p>
+  <a class="btn" id="openBtn" href="#">打开喜马拉雅</a>
+  <div class="warn" id="warn"></div>
+  <div class="err" id="err"></div>
+  <div class="hint">
+    打不开时请检查：<br>
+    1. 手机已安装喜马拉雅 App<br>
+    2. App 内登录的是<b>音频所属账号</b>（私密内容只有该账号可见）
+  </div>
+</div>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var track = q.get('t');
+  var album = q.get('a');
+  var name = q.get('n');
+  var deep = '';
+
+  if (track) {
+    deep = 'iting://open?msg_type=11&track_id=' + encodeURIComponent(track);
+  } else if (album) {
+    deep = 'iting://open?msg_type=13&album_id=' + encodeURIComponent(album);
+  }
+
+  var titleEl = document.getElementById('title');
+  var subEl = document.getElementById('sub');
+  var btn = document.getElementById('openBtn');
+  var warnEl = document.getElementById('warn');
+  var errEl = document.getElementById('err');
+
+  if (!deep) {
+    titleEl.textContent = '链接参数缺失';
+    subEl.textContent = '请在链接后加上 ?t=音频ID 或 ?a=专辑ID';
+    errEl.style.display = 'block';
+    errEl.innerHTML = '示例：<br><code>?t=1015366669</code> 打开单条音频<br><code>?a=121805384</code> 打开专辑';
+    btn.style.display = 'none';
+    return;
+  }
+
+  if (name) { titleEl.textContent = decodeURIComponent(name); }
+  else if (track) { titleEl.textContent = '喜马拉雅音频'; }
+  else { titleEl.textContent = '喜马拉雅专辑'; }
+
+  document.title = titleEl.textContent;
+  btn.setAttribute('href', deep);
+
+  var ua = navigator.userAgent.toLowerCase();
+  var isWx = ua.indexOf('micromessenger') !== -1;
+  var isQq = ua.indexOf(' qq/') !== -1 || ua.indexOf('qqbrowser') !== -1;
+
+  var autoTried = false;
+
+  function showFail(msg) {
+    warnEl.style.display = 'block';
+    warnEl.innerHTML = msg;
+  }
+
+  function tryOpen() {
+    var left = false;
+    var mark = function () { left = true; };
+    document.addEventListener('visibilitychange', mark);
+    window.addEventListener('pagehide', mark);
+    window.addEventListener('blur', mark);
+
+    try { location.href = deep; } catch (e) {}
+
+    setTimeout(function () {
+      document.removeEventListener('visibilitychange', mark);
+      window.removeEventListener('pagehide', mark);
+      window.removeEventListener('blur', mark);
+      if (left || document.hidden) { return; }
+      if (isWx) {
+        showFail('微信内无法直接唤起 App。请点右上角「…」→「在浏览器打开」，再点上方按钮。');
+      } else if (isQq) {
+        showFail('QQ 内可能拦截跳转。请点右上角菜单 →「在浏览器打开」，再点上方按钮。');
+      } else {
+        showFail('未能自动打开。请点击上方橙色按钮；若仍无反应，请确认已安装喜马拉雅 App。');
+      }
+    }, 1900);
+  }
+
+  btn.addEventListener('click', function (e) {
+    e.preventDefault();
+    tryOpen();
+  });
+
+  if (isWx) {
+    subEl.textContent = '微信内无法自动唤起，请用浏览器打开';
+    showFail('微信内无法直接唤起 App。请点右上角「…」→「在浏览器打开」，再点上方按钮。');
+  } else if (!/android|iphone|ipad|ipod|harmony/i.test(ua)) {
+    subEl.textContent = '请在手机上打开本链接';
+    showFail('当前看起来是电脑浏览器，自定义协议无法唤起手机 App。请用手机打开本链接。');
+  } else {
+    setTimeout(function () {
+      if (autoTried) { return; }
+      autoTried = true;
+      tryOpen();
+    }, 350);
+  }
+})();
+</script>
+</body>
+</html>
