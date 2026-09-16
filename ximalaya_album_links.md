@@ -18,7 +18,30 @@
 | 九下语文-课文 | 129010714 | `iting://open?msg_type=13&album_id=129010714` |
 | 九上语文-课本 | 129010739 | `iting://open?msg_type=13&album_id=129010739` |
 
-## 二、网页链接（通用性更好，手机打开后页面有「打开APP」入口）
+## 二、跳转页链接（推荐 ✅ 手机点开即唤起 App，微信里也能传）
+
+做法：**把原始链接直接拼在跳转页域名后**（中间加一个 `#`），不用再查 ID。
+
+| 专辑 | 跳转页链接 |
+|---|---|
+| 作文 | https://xmly-open.app.workbuddy.host/#https://www.ximalaya.com/album/121805384 |
+| 八上历史 | https://xmly-open.app.workbuddy.host/#https://www.ximalaya.com/album/129205382 |
+| 初中历史课程标准 | https://xmly-open.app.workbuddy.host/#https://www.ximalaya.com/album/129215555 |
+| 八上语文-课文 | https://xmly-open.app.workbuddy.host/#https://www.ximalaya.com/album/129010581 |
+| 八下语文-课本 | https://xmly-open.app.workbuddy.host/#https://www.ximalaya.com/album/129010693 |
+| 九下语文-课文 | https://xmly-open.app.workbuddy.host/#https://www.ximalaya.com/album/129010714 |
+| 九上语文-课本 | https://xmly-open.app.workbuddy.host/#https://www.ximalaya.com/album/129010739 |
+
+单条音频同理，把 `album/<albumId>` 换成 `sound/<trackId>`：
+
+```
+https://xmly-open.app.workbuddy.host/#https://www.ximalaya.com/sound/<trackId>
+```
+
+> `#` 必须保留：静态托管不支持路径回退，去掉会 404。
+> 也支持更短的写法 `https://xmly-open.app.workbuddy.host/?t=<trackId>`（专辑用 `?a=`）。
+
+## 三、网页链接（原始链接，通用性最好，手机打开后页面有「打开APP」入口）
 
 - 作文：https://www.ximalaya.com/album/121805384
 - 八上历史：https://www.ximalaya.com/album/129205382
@@ -52,7 +75,7 @@ iting://open?msg_type=11&track_id=1015366669
 
 ---
 
-## 四、使用注意
+## 五、使用注意
 
 1. `iting://` 这类自定义 scheme **在微信里点不开**（微信会屏蔽），请放到「备忘录 / 提醒事项」或浏览器地址栏点击。
 2. 网页链接（`ximalaya.com/album/...`）通用性更好，微信里也能传，手机打开后由页面上的「打开APP」唤起 App。

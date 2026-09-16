@@ -80,6 +80,10 @@ server {
     root ${REMOTE_DIR};
     index index.html;
 
+    # 支持「域名 + 原始链接」的纯路径写法：不把 // 合并成 /，
+    # 否则 https://www.ximalaya.com/... 会被压成 https:/www.ximalaya.com/...
+    merge_slashes off;
+
     # 跳转页是纯静态资源，不缓存，方便随时更新
     location / {
         try_files \$uri \$uri/ /index.html;

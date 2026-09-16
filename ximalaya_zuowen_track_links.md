@@ -1,6 +1,6 @@
 # 作文 · 音频直达链接清单
 
-生成时间：2026-09-16 12:45
+生成时间：2026-09-16 12:54
 
 专辑：**作文**（albumId `121805384`） | 在线 99 条 | 其中私密 99 条
 
@@ -11,6 +11,7 @@
 | 用途 | 链接 |
 |---|---|
 | 网页（微信可传） | https://xmly-open.app.workbuddy.host/?a=121805384&n=%E4%BD%9C%E6%96%87 |
+| 前缀写法（原链接拼在域名后） | https://xmly-open.app.workbuddy.host/#https://www.ximalaya.com/album/121805384 |
 | App 深链（直接跳 App） | iting://open?msg_type=13&album_id=121805384 |
 
 ## 单条音频（按专辑在线顺序）
@@ -125,4 +126,7 @@
 2. **必须登录音频所属账号**：私密音频（visibleCrowdType=1）只有该账号登录的喜马拉雅 App 才能播放。
 3. **链接本身不带权限**：换别人点开只能看到跳转页，播放会失败。
 4. 想让跳转页显示自定义名称，在链接后加 `&n=你的名称`。
-5. 原始链接格式 `https://www.ximalaya.com/sound/<trackId>`，把 `<trackId>` 填进 `?t=` 即可互换。
+5. **不想查 ID？用前缀写法**：把原始链接直接拼在跳转页域名后（中间加一个 `#`）——
+   `<跳转页>/#https://www.ximalaya.com/sound/<trackId>` 或
+   `<跳转页>/#https://www.ximalaya.com/album/<albumId>`，
+   效果与 `?t=` / `?a=` 完全一致。`#` 必须保留：静态托管不支持路径回退，缺了会 404。

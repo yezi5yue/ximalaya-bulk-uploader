@@ -96,6 +96,8 @@ def build_markdown(album_id, album_name, tracks, base):
     L.append("|---|---|")
     L.append("| 网页（微信可传） | %s?a=%d&n=%s |"
              % (base, album_id, urllib.parse.quote(album_name)))
+    L.append("| 前缀写法（原链接拼在域名后） | %s#https://www.ximalaya.com/album/%d |"
+             % (base, album_id))
     L.append("| App 深链（直接跳 App） | iting://open?msg_type=13&album_id=%d |"
              % album_id)
     L.append("")
@@ -117,8 +119,10 @@ def build_markdown(album_id, album_name, tracks, base):
              "喜马拉雅 App 才能播放。")
     L.append("3. **链接本身不带权限**：换别人点开只能看到跳转页，播放会失败。")
     L.append("4. 想让跳转页显示自定义名称，在链接后加 `&n=你的名称`。")
-    L.append("5. 原始链接格式 `https://www.ximalaya.com/sound/<trackId>`，"
-             "把 `<trackId>` 填进 `?t=` 即可互换。")
+    L.append("5. **不想查 ID？用前缀写法**：把原始链接直接拼在跳转页域名后（中间加一个 `#`）——")
+    L.append("   `<跳转页>/#https://www.ximalaya.com/sound/<trackId>` 或")
+    L.append("   `<跳转页>/#https://www.ximalaya.com/album/<albumId>`，")
+    L.append("   效果与 `?t=` / `?a=` 完全一致。`#` 必须保留：静态托管不支持路径回退，缺了会 404。")
     return "\n".join(L) + "\n"
 
 
