@@ -130,7 +130,7 @@ def main():
 
         # Poll until we are logged in (cookie-based primary check).
         print("Waiting for login (scan the QR code) ...", flush=True)
-        deadline = time.time() + 180  # 3 minutes
+        deadline = time.time() + 600  # 10 minutes
         logged_in = False
         while time.time() < deadline:
             if is_logged_in(page, context):

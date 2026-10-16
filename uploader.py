@@ -849,6 +849,24 @@ def _publish_one(page, apath, title, desc, album, visibility_value='1',
         return False, ("platform risk-control / captcha challenge detected — "
                        "stop and retry later (do not keep hammering the UI)")
 
+    # 6.8 平台新增"是否AI合成"单选（2026-10 起不选则发布按钮不可用）。
+    # NotebookLM 生成内容属 AI 合成，如实选"是"。
+    try:
+        page.evaluate("""() => {
+            const items = Array.from(document.querySelectorAll('.ant-form-item'))
+                .filter(it => {
+                    const l = it.querySelector('.ant-form-item-label');
+                    return l && /AI合成/.test(l.innerText || '');
+                });
+            if (!items.length) return;
+            const yes = Array.from(items[0].querySelectorAll('.ant-radio-wrapper'))
+                .find(r => (r.innerText || '').trim() === '是');
+            if (yes) yes.click();
+        }""")
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
+
     # 7. Tick the "我已阅读并同意《知识产权承诺》" agreement if present.
     #    The 确认发布 button stays DISABLED until this is checked, which is
     #    exactly why some publishes silently did nothing (page never left
@@ -877,6 +895,14 @@ def _publish_one(page, apath, title, desc, album, visibility_value='1',
     #    while the audio finishes server-side processing, so we wait for it to
     #    become enabled, click, and re-check for the success navigation — up to
     #    4 attempts — before giving up.
+    # DIAG 2026-10-10: screenshot + failing-API log right before the click.
+    try:
+        bad = []
+        page.on("response", lambda r: bad.append(f"{r.status} {r.url[:90]}") if r.status >= 400 else None)
+        page.screenshot(path=os.path.join(SCRIPT_DIR, "_before_publish.png"))
+        globals()["_last_bad_apis"] = bad
+    except Exception:
+        pass
     publish_btn = page.locator("button.confirm-publish-btn-new-3F0EvXXa").first
     success = False
     last_url = page.url
@@ -903,9 +929,10 @@ def _publish_one(page, apath, title, desc, album, visibility_value='1',
     if success:
         return True, page.url
     # DIAGNOSTIC: surface what the page shows so we can see why publish stalled.
+    bad = globals().get("_last_bad_apis") or []
     diag = page.evaluate("() => document.body.innerText") or ""
-    diag = diag.replace("\n", " ").strip()[:500]
-    return False, f"no success signal within timeout, URL: {last_url} | page: {diag}"
+    diag = diag.replace("\n", " ").strip()[:400]
+    return False, f"no success signal within timeout, URL: {last_url} | page: {diag} | bad_apis: {'; '.join(bad[-6:])}"
 
 
 def publish_all(folder, config, skip_confirm=False, start_from=1):

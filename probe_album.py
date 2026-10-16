@@ -49,9 +49,10 @@ def main():
         try:
             page.goto(UPLOAD_URL, timeout=60000)
             page.wait_for_timeout(2500)
-            page.locator("button.search-select-album-btn-2fDgDdbT").first.click()
+            # CSS-module 哈希类名每次发版都会变，用子串匹配更稳
+            page.locator("button[class*='search-select-album-btn']").first.click()
             page.wait_for_timeout(1500)
-            items = page.locator("div.scroll-item-content-252FXLKk").all_inner_texts()
+            items = page.locator("div[class*='scroll-item-content']").all_inner_texts()
             found = any(args.album in t for t in items)
             if not found:
                 print(f"Album '{args.album}' was NOT found. "
